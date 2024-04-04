@@ -22,11 +22,15 @@
  * under the License.
  */
 
-#include "GPUConfig.h"
+#include "GraphicsConfig.h"
 
+#include "../Utilities/ThirdParty/OpenSource/Nothings/stb_ds.h"
 #include "../Utilities/ThirdParty/OpenSource/bstrlib/bstrlib.h"
 
 #include "../Utilities/Interfaces/IFileSystem.h"
+#include "Interfaces/IGraphics.h"
+
+#include "../Utilities/Interfaces/IMemory.h"
 
 ///////////////////////////////////////////////////////////
 // HELPER DECLARATIONS
@@ -34,8 +38,11 @@
 #define MAXIMUM_GPU_COMPARISON_CHOICES 256
 #define MAXIMUM_GPU_SETTINGS           256
 
-extern uint32_t gPreferredGPUDeviceId;
-GPUPresetLevel  gDefaultPresetLevel;
+#define GPUCFG_VERSION_MAJOR           0
+#define GPUCFG_VERSION_MINOR           2
+
+extern PlatformParameters gPlatformParameters;
+GPUPresetLevel            gDefaultPresetLevel;
 
 typedef uint64_t (*PropertyGetter)(const GPUSettings* pSetting);
 typedef void (*PropertySetter)(GPUSettings* pSetting, uint64_t value);
@@ -90,6 +97,7 @@ const GPUProperty availableGpuProperties[] = {
     GPU_CONFIG_PROPERTY("hdrsupported", mHDRSupported),
 #if defined(VULKAN)
     GPU_CONFIG_PROPERTY("dynamicrenderingenabled", mDynamicRenderingSupported),
+    GPU_CONFIG_PROPERTY("xclipsetransferqueueworkaroundenabled", mXclipseTransferQueueWorkaround),
 #endif
     GPU_CONFIG_PROPERTY("indirectcommandbuffer", mIndirectCommandBuffer),
     GPU_CONFIG_PROPERTY("indirectrootconstant", mIndirectRootConstant),
@@ -138,6 +146,16 @@ struct GPUVendorDefinition
     uint32_t identifierArray[MAX_INDENTIFIER_PER_GPU_VENDOR_COUNT] = {};
     uint32_t identifierCount = 0;
 };
+
+struct GPUModelDefinition
+{
+    uint32_t       mVendorId;
+    uint32_t       mDeviceId;
+    GPUPresetLevel mPreset;
+    char           mModelName[MAX_GPU_VENDOR_STRING_LENGTH];
+};
+
+static GPUModelDefinition* gGPUModels = NULL;
 
 /* ------------------------ gpu.cfg ------------------------ */
 struct ConfigurationRule
@@ -243,8 +261,6 @@ typedef enum ConfigParsingStatus
 static GPUVendorDefinition  gGPUVendorDefinitions[MAX_GPU_VENDOR_COUNT] = {};
 static uint32_t             gGPUVendorCount = 0;
 static char*                gGpuDataFileBuffer = nullptr;
-static char*                gGpuListBeginFileCursor = nullptr;
-static char*                gGpuListEndFileCursor = nullptr;
 // ------ gpu.cfg
 static GPUComparisonChoice  gGPUComparisonChoices[MAXIMUM_GPU_COMPARISON_CHOICES] = {};
 static ConfigurationSetting gConfigurationSettings[MAXIMUM_GPU_SETTINGS];
@@ -256,7 +272,7 @@ static uint32_t             gDriverRejectionRulesCount = 0;
 static uint32_t             gConfigurationSettingsCount = 0;
 static uint32_t             gUserExtendedSettingsCount = 0;
 
-void initGPUSettings(ExtendedSettings* pExtendedSettings)
+void addGPUConfigurationRules(ExtendedSettings* pExtendedSettings)
 {
     fsSetPathForResourceDir(pSystemFileIO, RM_CONTENT, RD_GPU_CONFIG, "GPUCfg");
     parseGPUDataFile();
@@ -276,16 +292,35 @@ void parseGPUDataFile()
     DataParsingStatus parsingStatus = DataParsingStatus::DATA_PARSE_NONE;
     char              currentLineStr[1024] = {};
     gGPUVendorCount = 0;
-    gGpuListBeginFileCursor = nullptr;
-    gGpuListEndFileCursor = nullptr;
+    char* gpuListBeginFileCursor = nullptr;
+    char* gpuListEndFileCursor = nullptr;
 
     size_t fileSize = fsGetStreamFileSize(&fh);
     gGpuDataFileBuffer = (char*)tf_malloc(fileSize * sizeof(char));
     fsReadFromStream(&fh, (void*)gGpuDataFileBuffer, fileSize);
     char* fileCursor = gGpuDataFileBuffer;
     char* gGpuDataFileEnd = gGpuDataFileBuffer + fileSize;
-    gGpuListEndFileCursor = gGpuDataFileEnd;
     char* previousLineCursor = fileCursor;
+
+    if (bufferedGetLine(currentLineStr, &fileCursor, gGpuDataFileEnd))
+    {
+        uint32_t versionMajor = 0;
+        uint32_t versionMinor = 0;
+        int      read = sscanf(currentLineStr, "version:%u.%u", &versionMajor, &versionMinor);
+        if (read != 2)
+        {
+            LOGF(eINFO, "Ill-formatted gpu.data file. Missing version at beginning of file");
+            fsCloseStream(&fh);
+            return;
+        }
+        else if (versionMajor != GPUCFG_VERSION_MAJOR || versionMinor != GPUCFG_VERSION_MINOR)
+        {
+            LOGF(eINFO, "gpu.data version mismatch. Expected version %u.%u but got %u.%u", GPUCFG_VERSION_MAJOR, GPUCFG_VERSION_MINOR,
+                 versionMajor, versionMinor);
+            fsCloseStream(&fh);
+            return;
+        }
+    }
 
     while (bufferedGetLine(currentLineStr, &fileCursor, gGpuDataFileEnd))
     {
@@ -294,9 +329,13 @@ void parseGPUDataFile()
         size_t      ruleLength = strcspn(lineCursor, "#");
         const char* pLineEnd = lineCursor + ruleLength;
         while (currentLineStr != pLineEnd && isspace(*lineCursor))
+        {
             ++lineCursor;
+        }
         if (lineCursor == pLineEnd)
+        {
             continue;
+        }
 
         switch (parsingStatus)
         {
@@ -313,7 +352,7 @@ void parseGPUDataFile()
             {
                 // mark the first line after BEGIN_GPU_SELECTION as the beginingCursor
                 parsingStatus = DataParsingStatus::DATA_PARSE_GPU_MODEL;
-                gGpuListBeginFileCursor = fileCursor;
+                gpuListBeginFileCursor = fileCursor;
             }
             break;
         case DataParsingStatus::DATA_PARSE_GPU_VENDOR:
@@ -330,8 +369,30 @@ void parseGPUDataFile()
             if (strcmp(currentLineStr, "END_GPU_LIST;") == 0)
             {
                 // in an ideal world it would need to be before END_VENDOR_LIST; but we can live with this
-                gGpuListEndFileCursor = previousLineCursor;
+                gpuListEndFileCursor = previousLineCursor;
                 parsingStatus = DataParsingStatus::DATA_PARSE_NONE;
+            }
+            else
+            {
+                char  vendorIdStr[256] = {};
+                char  modelIdStr[256] = {};
+                char  presetStr[256] = {};
+                char  vendorNameStr[256] = {};
+                char  modelNameStr[256] = {};
+                char* tokens[] = { vendorIdStr, modelIdStr, presetStr, vendorNameStr, modelNameStr };
+                tokenizeLine(currentLineStr, pLineEnd, TF_ARRAY_COUNT(tokens), tokens);
+                GPUModelDefinition model = {};
+                model.mVendorId = (uint32_t)strtoul(vendorIdStr + 2, NULL, 16);
+                model.mDeviceId = (uint32_t)strtoul(modelIdStr + 2, NULL, 16);
+                model.mPreset = stringToPresetLevel(presetStr);
+                if (modelNameStr[0] != '\0')
+                {
+                    strncpy(model.mModelName, modelNameStr, TF_ARRAY_COUNT(modelNameStr));
+                }
+                if (model.mVendorId && model.mDeviceId)
+                {
+                    arrpush(gGPUModels, model);
+                }
             }
             break;
         case DataParsingStatus::DATA_PARSE_DEFAULT_CONFIGURATION:
@@ -377,9 +438,9 @@ void parseGPUDataFile()
         LOGF(eINFO, "    %s", vendorStr);
     }
 
-    if (!gGpuListBeginFileCursor)
+    if (!gpuListBeginFileCursor || !gpuListEndFileCursor)
     {
-        LOGF(eINFO, "Could not find a valid list of gpu in gpu.data please check BEGIN_GPU_LIST; is properly defined");
+        LOGF(eINFO, "Could not find a valid list of gpu in gpu.data please check BEGIN_GPU_LIST; END_GPU_LIST; is properly defined");
     }
 
     fsCloseStream(&fh);
@@ -543,10 +604,11 @@ void parseGPUConfigFile(ExtendedSettings* pExtendedSettings)
     fsCloseStream(&fh);
 }
 
-void exitGPUSettings()
+void removeGPUConfigurationRules()
 {
     tf_free(gGpuDataFileBuffer);
     tf_free(gDriverRejectionRules);
+    arrfree(gGPUModels);
     gDriverRejectionRules = NULL;
 
     for (uint32_t i = 0; i < gGPUComparisonChoiceCount; i++)
@@ -853,7 +915,7 @@ void parseConfigurationRules(ConfigurationRule** ppConfigurationRules, uint32_t*
             // hack for preferred gpu
             if (strstr(stringToLower(parsedValue), "preferredgpu") != 0)
             {
-                currentComparisonRule->comparatorValue = gPreferredGPUDeviceId;
+                currentComparisonRule->comparatorValue = gPlatformParameters.mPreferedGpuId;
             }
             else
             {
@@ -983,7 +1045,7 @@ uint32_t util_select_best_gpu(GPUSettings* availableSettings, uint32_t gpuCount)
     {
         for (uint32_t i = 0; i < gpuCount; ++i)
         {
-            if (availableSettings[i].mGpuVendorPreset.mModelId == gPreferredGPUDeviceId)
+            if (availableSettings[i].mGpuVendorPreset.mModelId == gPlatformParameters.mPreferedGpuId)
             {
                 gpuIndex = i;
                 break;
@@ -1000,7 +1062,7 @@ uint32_t util_select_best_gpu(GPUSettings* availableSettings, uint32_t gpuCount)
     return gpuIndex;
 }
 
-void applyConfigurationSettings(GPUSettings* pGpuSettings, GPUCapBits* pCapBits)
+void applyGPUConfigurationRules(GPUSettings* pGpuSettings, GPUCapBits* pCapBits)
 {
     for (uint32_t i = 0; i < gConfigurationSettingsCount; i++)
     {
@@ -1029,7 +1091,7 @@ void applyConfigurationSettings(GPUSettings* pGpuSettings, GPUCapBits* pCapBits)
     }
 }
 
-void applyExtendedSettings(ExtendedSettings* pExtendedSettings, const GPUSettings* pGpuSettings)
+void setupExtendedSettings(ExtendedSettings* pExtendedSettings, const GPUSettings* pGpuSettings)
 {
     ASSERT(pExtendedSettings && pExtendedSettings->pSettings);
 
@@ -1122,78 +1184,36 @@ FORGE_API bool checkDriverRejectionSettings(const GPUSettings* pGpuSettings)
 
 GPUPresetLevel getDefaultPresetLevel() { return gDefaultPresetLevel; }
 
-GPUPresetLevel getGPUPresetLevel(const char* vendorName, const char* modelName) { return getGPUPresetLevel(vendorName, modelName, 0, 0); }
-
-GPUPresetLevel getGPUPresetLevel(const char* vendorName, const char* modelName, uint32_t modelId)
+GPUPresetLevel getGPUPresetLevel(uint32_t vendorId, uint32_t modelId, const char* vendorName, const char* modelName)
 {
-    return getGPUPresetLevel(vendorName, modelName, modelId, 0);
-}
+    GPUPresetLevel presetLevel = GPU_PRESET_NONE;
 
-GPUPresetLevel getGPUPresetLevel(const char* vendorName, const char* modelName, uint32_t modelId, uint32_t revId)
-{
-    char           modelIdStr[MAX_GPU_VENDOR_STRING_LENGTH] = {};
-    char           revIdStr[MAX_GPU_VENDOR_STRING_LENGTH] = {};
-    GPUPresetLevel presetLevel = gDefaultPresetLevel;
-    bool           usingDefault = true;
-
-    const char* pModelIdStr = NULL;
-    if (modelId != 0)
+    if (arrlenu(gGPUModels))
     {
-        snprintf(modelIdStr, MAX_GPU_VENDOR_STRING_LENGTH, "%#x", modelId);
-        pModelIdStr = modelIdStr;
-    }
-
-    const char* pRevIdStr = NULL;
-    if (revId != 0)
-    {
-        snprintf(revIdStr, MAX_GPU_VENDOR_STRING_LENGTH, "%#x", revId);
-        pRevIdStr = revIdStr;
-    }
-
-    // Some model names have extra trademark symbols in the name, strip it out before comparision
-    bstring  stripped_strings[] = { bconstfromliteral("(TM)"), bconstfromliteral("(R)") };
-    bstring  empty = bempty();
-    uint32_t string_count = TF_ARRAY_COUNT(stripped_strings);
-    bstring  trimmedModelName = bdynfromcstr(modelName);
-    for (uint32_t i = 0; i < string_count; ++i)
-    {
-        bfindreplacecaseless(&trimmedModelName, &stripped_strings[i], &empty, 0);
-    }
-
-    bstring doubleSpace = bconstfromliteral("  ");
-    bstring singleSpace = bconstfromliteral(" ");
-    // Replace double spaces
-    bfindreplacecaseless(&trimmedModelName, &doubleSpace, &singleSpace, 0);
-
-    if (gGpuListBeginFileCursor != nullptr)
-    {
-        char  gpuDataString[1024] = {};
-        char* gpuFileCursor = gGpuListBeginFileCursor;
-        while (bufferedGetLine(gpuDataString, &gpuFileCursor, gGpuListEndFileCursor))
+        for (uint32_t gpuModelIndex = 0; gpuModelIndex < arrlenu(gGPUModels); ++gpuModelIndex)
         {
-            GPUPresetLevel level = getSinglePresetLevel(gpuDataString, vendorName, bdata(&trimmedModelName), pModelIdStr, pRevIdStr);
-            // Do something with the tok
-            if (level != GPU_PRESET_NONE)
+            GPUModelDefinition model = gGPUModels[gpuModelIndex];
+            if (model.mVendorId == vendorId && model.mDeviceId == modelId && model.mDeviceId)
             {
-                LOGF(eINFO, "Setting preset level %s for gpu vendor:%s model:%s", presetLevelToString(level), vendorName, modelName);
-                presetLevel = level;
-                usingDefault = false;
+                presetLevel = model.mPreset;
                 break;
             }
         }
     }
+
+#if defined(ENABLE_GRAPHICS_DEBUG)
+    if (presetLevel != GPU_PRESET_NONE)
+    {
+        LOGF(eINFO, "Setting preset level %s for gpu vendor:%s model:%s", presetLevelToString(presetLevel), vendorName, modelName);
+    }
     else
     {
-        LOGF(eWARNING, "BEGIN_GPU_LIST; is missing, setting preset to %s as a default.", presetLevelToString(gDefaultPresetLevel));
-    }
-
-    if (usingDefault)
-    {
+        presetLevel = gDefaultPresetLevel;
         LOGF(eWARNING, "Couldn't find gpu %s model: %s in gpu.data. Setting preset to %s as a default.", vendorName, modelName,
-             presetLevelToString(gDefaultPresetLevel));
+             presetLevelToString(presetLevel));
     }
+#endif
 
-    bdestroy(&trimmedModelName);
     return presetLevel;
 }
 
@@ -1310,6 +1330,21 @@ bool gpuVendorEquals(uint32_t vendorId, const char* vendorName)
     stringToLower(comparisonValueLower);
     return strcmp(currentVendorNameLower, comparisonValueLower) == 0;
 }
+
+#if defined(__APPLE__)
+uint32_t getGPUModelID(const char* modelName)
+{
+    for (uint32_t i = 0; i < arrlenu(gGPUModels); ++i)
+    {
+        GPUModelDefinition* model = &gGPUModels[i];
+        if (!strncmp(modelName, model->mModelName, TF_ARRAY_COUNT(model->mModelName)))
+        {
+            return model->mDeviceId;
+        }
+    }
+    return UINT32_MAX;
+}
+#endif
 
 bool compare(const char* cmp, uint64_t a, uint64_t b)
 {
