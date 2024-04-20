@@ -122,6 +122,11 @@ DECLARE_RENDERER_FUNCTION(void, removeTexture, Renderer* pRenderer, Texture* pTe
 
 extern PlatformParameters gPlatformParameters;
 
+inline constexpr PlatformParameters& GetPlatformParameters()
+{
+	return gPlatformParameters;
+}
+
 struct ShaderByteCodeBuffer
 {
     // Make sure we don't stack overflow
@@ -453,7 +458,7 @@ bool isUma() { return gUma; }
 static inline FORGE_CONSTEXPR bool StrictQueueTypeBarriers()
 {
 #if defined(STRICT_QUEUE_TYPE_BARRIERS)
-    if (RENDERER_API_D3D12 == gPlatformParameters.mSelectedRendererApi)
+    if (RENDERER_API_D3D12 == GetPlatformParameters().mSelectedRendererApi)
     {
         return true;
     }
@@ -483,7 +488,7 @@ static inline bool IssueTextureCopyBarriers()
 static inline FORGE_CONSTEXPR bool IssueBufferCopyBarriers() //-V524
 {
 #if defined(DIRECT3D12)
-    if (RENDERER_API_D3D12 == gPlatformParameters.mSelectedRendererApi)
+    if (RENDERER_API_D3D12 == GetPlatformParameters().mSelectedRendererApi)
     {
         return true;
     }

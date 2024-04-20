@@ -156,7 +156,7 @@ public:
 protected:
     virtual void ReleaseThis() { delete this; }
 private:
-    D3D12MA_ATOMIC_UINT32 m_RefCount = 1;
+    D3D12MA_ATOMIC_UINT32 m_RefCount = {1};
 };
 } // namespace D3D12MA
 
@@ -7642,7 +7642,7 @@ private:
     D3D12MA_ATOMIC_UINT64 m_BlockBytes[DXGI_MEMORY_SEGMENT_GROUP_COUNT] = {};
     D3D12MA_ATOMIC_UINT64 m_AllocationBytes[DXGI_MEMORY_SEGMENT_GROUP_COUNT] = {};
 
-    D3D12MA_ATOMIC_UINT32 m_OperationsSinceBudgetFetch = 0;
+    D3D12MA_ATOMIC_UINT32 m_OperationsSinceBudgetFetch = {0};
     D3D12MA_RW_MUTEX m_BudgetMutex;
     UINT64 m_D3D12Usage[DXGI_MEMORY_SEGMENT_GROUP_COUNT] = {};
     UINT64 m_D3D12Budget[DXGI_MEMORY_SEGMENT_GROUP_COUNT] = {};
@@ -7880,7 +7880,7 @@ class AllocatorPimpl
     friend class Allocator;
     friend class Pool;
 public:
-    std::atomic_uint32_t m_RefCount = 1;
+    std::atomic_uint32_t m_RefCount = {1};
     CurrentBudgetData m_Budget;
 
     AllocatorPimpl(const ALLOCATION_CALLBACKS& allocationCallbacks, const ALLOCATOR_DESC& desc);
@@ -11290,6 +11290,10 @@ void Allocation::SetName(LPCWSTR Name)
     }
 }
 
+#if defined __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wtautological-undefined-compare"
+#endif
 void Allocation::ReleaseThis()
 {
     if (this == NULL)
@@ -11316,6 +11320,9 @@ void Allocation::ReleaseThis()
 
     m_Allocator->GetAllocationObjectAllocator().Free(this);
 }
+#if defined __clang__
+#pragma clang diagnostic pop
+#endif
 
 Allocation::Allocation(AllocatorPimpl* allocator, UINT64 size, UINT64 alignment, BOOL wasZeroInitialized)
     : m_Allocator{ allocator },
@@ -11440,6 +11447,10 @@ void DefragmentationContext::GetStats(DEFRAGMENTATION_STATS* pStats)
     m_Pimpl->GetStats(*pStats);
 }
 
+#if defined __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wtautological-undefined-compare"
+#endif
 void DefragmentationContext::ReleaseThis()
 {
     if (this == NULL)
@@ -11449,6 +11460,9 @@ void DefragmentationContext::ReleaseThis()
 
     D3D12MA_DELETE(m_Pimpl->GetAllocs(), this);
 }
+#if defined __clang__
+#pragma clang diagnostic pop
+#endif
 
 DefragmentationContext::DefragmentationContext(AllocatorPimpl* allocator,
     const DEFRAGMENTATION_DESC& desc,

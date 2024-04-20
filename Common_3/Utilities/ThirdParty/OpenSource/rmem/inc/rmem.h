@@ -77,8 +77,16 @@
 
 /* check for clang before GCC as clang defines GNU macros as well */
 #elif defined(__clang__)
-#undef RMEM_COMPILER_CLANG
-#define RMEM_COMPILER_CLANG 1
+//BEGIN TFALIAS EDIT
+#if defined(_MSC_VER)
+	//Account for clang-targeting-msvc
+	#undef RMEM_COMPILER_MSVC
+	#define RMEM_COMPILER_MSVC 1
+#else
+	#undef RMEM_COMPILER_CLANG
+	#define RMEM_COMPILER_CLANG 1
+#endif
+//END TFALIAS EDIT
 
 #elif defined(__GNUC__)
 #undef RMEM_COMPILER_GCC

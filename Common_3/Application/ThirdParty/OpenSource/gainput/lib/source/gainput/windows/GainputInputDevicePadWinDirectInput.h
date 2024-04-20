@@ -14,6 +14,10 @@
 
 #include "../pad/GainputControllerDb.h"
 
+#if defined(_WINDOWS)
+	extern bool HIDIsSupported(uint16_t vendor, uint16_t product);
+#endif
+
 const GUID FAR    USB_DEVICE = { 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1F, 0x00, 0xC0, 0x4F, 0xB9, 0x51, 0xED };
 static HDEVNOTIFY hDeviceNotify;
 /*DirectInput implementation : methods/helper functionalities derived from SDL(Thank You SDL)*/
@@ -1134,14 +1138,12 @@ public:
 	void FilterHIDHandledDevices()
 	{
 #if defined(_WINDOWS)
-		extern bool HIDIsSupported(uint16_t vendor, uint16_t product);
-
 		int32_t it = gamePads.directInputCountConnected - 1;
 
 		for (; it >= 0; --it)
 		{
 			joystick_hwdata* pad = &gamePads.gamePadInfos[it].gamepad.hwdata;
-			if (HIDIsSupported(pad->vendor, pad->product))
+			if (::HIDIsSupported(pad->vendor, pad->product))
 			{
 				int32_t last = gamePads.directInputCountConnected - 1;
 
