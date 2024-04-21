@@ -14,9 +14,11 @@
 
 #include "../pad/GainputControllerDb.h"
 
+//BEGIN ZigTheForge modification -- declare extern in global namespace
 #if defined(_WINDOWS)
 	extern bool HIDIsSupported(uint16_t vendor, uint16_t product);
 #endif
+//END ZigTheForge modification
 
 const GUID FAR    USB_DEVICE = { 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1F, 0x00, 0xC0, 0x4F, 0xB9, 0x51, 0xED };
 static HDEVNOTIFY hDeviceNotify;
@@ -1138,12 +1140,16 @@ public:
 	void FilterHIDHandledDevices()
 	{
 #if defined(_WINDOWS)
+//BEGIN ZigTheForge modification -- remove extern declaration in function
+//END ZigTheForge modification
 		int32_t it = gamePads.directInputCountConnected - 1;
 
 		for (; it >= 0; --it)
 		{
 			joystick_hwdata* pad = &gamePads.gamePadInfos[it].gamepad.hwdata;
+			//BEGIN ZigTheForge modification -- explicit global namespace fix
 			if (::HIDIsSupported(pad->vendor, pad->product))
+			//END ZigTheForge modification
 			{
 				int32_t last = gamePads.directInputCountConnected - 1;
 

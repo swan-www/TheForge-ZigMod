@@ -101,11 +101,13 @@ typedef uint64_t uint64;
 #endif
 #endif
 
+//BEGIN ZigTheForge modification -- for clang-cl, redefine stricmp and strdup
 #if defined(_WINDOWS) && defined(__clang__) && defined(_MSC_VER)
     //Consider Clang targeting msvc
 #define stricmp(a, b) _stricmp(a, b)
 #define strdup(x) _strdup(x)
 #endif
+//END ZigTheForge modification
 
 #if defined(XBOX)
 #define stricmp(a, b) _stricmp(a, b)

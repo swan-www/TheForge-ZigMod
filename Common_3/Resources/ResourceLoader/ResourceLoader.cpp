@@ -122,10 +122,12 @@ DECLARE_RENDERER_FUNCTION(void, removeTexture, Renderer* pRenderer, Texture* pTe
 
 extern PlatformParameters gPlatformParameters;
 
+//BEGIN ZigTheForge modification -- constexpr getter for global, to prevent failure due to read of global
 inline constexpr PlatformParameters& GetPlatformParameters()
 {
 	return gPlatformParameters;
 }
+//END ZigTheForge modification
 
 struct ShaderByteCodeBuffer
 {
@@ -458,7 +460,9 @@ bool isUma() { return gUma; }
 static inline FORGE_CONSTEXPR bool StrictQueueTypeBarriers()
 {
 #if defined(STRICT_QUEUE_TYPE_BARRIERS)
+//BEGIN ZigTheForge modification -- constexpr getter for global
     if (RENDERER_API_D3D12 == GetPlatformParameters().mSelectedRendererApi)
+//END ZigTheForge modification
     {
         return true;
     }
@@ -488,7 +492,9 @@ static inline bool IssueTextureCopyBarriers()
 static inline FORGE_CONSTEXPR bool IssueBufferCopyBarriers() //-V524
 {
 #if defined(DIRECT3D12)
+//BEGIN ZigTheForge modification -- constexpr getter for global
     if (RENDERER_API_D3D12 == GetPlatformParameters().mSelectedRendererApi)
+//END ZigTheForge modification
     {
         return true;
     }

@@ -140,9 +140,9 @@ void getOsVersion(ULONG& majorVersion, ULONG& minorVersion, ULONG& buildNumber)
 {
     void(WINAPI * pfnRtlGetNtVersionNumbers)(__out_opt ULONG * pNtMajorVersion, __out_opt ULONG * pNtMinorVersion,
                                              __out_opt ULONG * pNtBuildNumber);
-
+//BEGIN ZigTheForge modification -- wrap string literal in TEXT macro.
     (FARPROC&)pfnRtlGetNtVersionNumbers = GetProcAddress(GetModuleHandle(TEXT("ntdll.dll")), "RtlGetNtVersionNumbers");
-
+//END ZigTheForge modification
     if (pfnRtlGetNtVersionNumbers)
     {
         pfnRtlGetNtVersionNumbers(&majorVersion, &minorVersion, &buildNumber);

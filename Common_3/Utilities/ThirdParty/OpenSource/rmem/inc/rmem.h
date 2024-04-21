@@ -77,7 +77,7 @@
 
 /* check for clang before GCC as clang defines GNU macros as well */
 #elif defined(__clang__)
-//BEGIN TFALIAS EDIT
+//BEGIN ZigTheForge modification -- define clang-cl as RMEM_COMPILER_MSVC
 #if defined(_MSC_VER)
 	//Account for clang-targeting-msvc
 	#undef RMEM_COMPILER_MSVC
@@ -86,7 +86,7 @@
 	#undef RMEM_COMPILER_CLANG
 	#define RMEM_COMPILER_CLANG 1
 #endif
-//END TFALIAS EDIT
+//END ZigTheForge modification
 
 #elif defined(__GNUC__)
 #undef RMEM_COMPILER_GCC

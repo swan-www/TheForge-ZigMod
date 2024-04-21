@@ -156,7 +156,9 @@ public:
 protected:
     virtual void ReleaseThis() { delete this; }
 private:
+//BEGIN ZigTheForge modification -- resolve as construction, not assignment
     D3D12MA_ATOMIC_UINT32 m_RefCount = {1};
+//END ZigTheForge modification
 };
 } // namespace D3D12MA
 
@@ -7641,8 +7643,9 @@ private:
     D3D12MA_ATOMIC_UINT32 m_AllocationCount[DXGI_MEMORY_SEGMENT_GROUP_COUNT] = {};
     D3D12MA_ATOMIC_UINT64 m_BlockBytes[DXGI_MEMORY_SEGMENT_GROUP_COUNT] = {};
     D3D12MA_ATOMIC_UINT64 m_AllocationBytes[DXGI_MEMORY_SEGMENT_GROUP_COUNT] = {};
-
+//BEGIN ZigTheForge modification -- resolve as construction, not assignment
     D3D12MA_ATOMIC_UINT32 m_OperationsSinceBudgetFetch = {0};
+//END ZigTheForge modification
     D3D12MA_RW_MUTEX m_BudgetMutex;
     UINT64 m_D3D12Usage[DXGI_MEMORY_SEGMENT_GROUP_COUNT] = {};
     UINT64 m_D3D12Budget[DXGI_MEMORY_SEGMENT_GROUP_COUNT] = {};
@@ -7880,7 +7883,9 @@ class AllocatorPimpl
     friend class Allocator;
     friend class Pool;
 public:
+//BEGIN ZigTheForge modification -- resolve as construction, not assignment
     std::atomic_uint32_t m_RefCount = {1};
+//END ZigTheForge modification
     CurrentBudgetData m_Budget;
 
     AllocatorPimpl(const ALLOCATION_CALLBACKS& allocationCallbacks, const ALLOCATOR_DESC& desc);
@@ -11290,10 +11295,12 @@ void Allocation::SetName(LPCWSTR Name)
     }
 }
 
+//BEGIN ZigTheForge modification -- silence undefined compare
 #if defined __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wtautological-undefined-compare"
 #endif
+//END ZigTheForge modification
 void Allocation::ReleaseThis()
 {
     if (this == NULL)
@@ -11320,9 +11327,11 @@ void Allocation::ReleaseThis()
 
     m_Allocator->GetAllocationObjectAllocator().Free(this);
 }
+//BEGIN ZigTheForge modification -- silence undefined compare
 #if defined __clang__
 #pragma clang diagnostic pop
 #endif
+//END ZigTheForge modification
 
 Allocation::Allocation(AllocatorPimpl* allocator, UINT64 size, UINT64 alignment, BOOL wasZeroInitialized)
     : m_Allocator{ allocator },
@@ -11447,10 +11456,12 @@ void DefragmentationContext::GetStats(DEFRAGMENTATION_STATS* pStats)
     m_Pimpl->GetStats(*pStats);
 }
 
+//BEGIN ZigTheForge modification -- silence undefined compare
 #if defined __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wtautological-undefined-compare"
 #endif
+//END ZigTheForge modification
 void DefragmentationContext::ReleaseThis()
 {
     if (this == NULL)
@@ -11460,9 +11471,11 @@ void DefragmentationContext::ReleaseThis()
 
     D3D12MA_DELETE(m_Pimpl->GetAllocs(), this);
 }
+//BEGIN ZigTheForge modification -- silence undefined compare
 #if defined __clang__
 #pragma clang diagnostic pop
 #endif
+//END ZigTheForge modification
 
 DefragmentationContext::DefragmentationContext(AllocatorPimpl* allocator,
     const DEFRAGMENTATION_DESC& desc,
