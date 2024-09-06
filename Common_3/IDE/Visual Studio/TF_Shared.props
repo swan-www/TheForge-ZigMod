@@ -4,6 +4,10 @@
   <PropertyGroup>
     <TheForgeRoot>$([System.IO.Path]::GetFullPath("$(MSBuildThisFileDirectory)..\..\..\"))</TheForgeRoot>
     <CustomMiddlewareRoot>$([System.IO.Path]::GetFullPath("$(TheForgeRoot)..\Custom-Middleware\"))</CustomMiddlewareRoot>
+    <UsingMSVC>false</UsingMSVC>
+    <UsingMSVC Condition="'$(Platform)'=='x64'">true</UsingMSVC>
+    <UsingMSVC Condition="'$(Platform)'=='Gaming.Xbox.XboxOne.x64'">true</UsingMSVC>
+    <UsingMSVC Condition="'$(Platform)'=='Gaming.Xbox.Scarlett.x64'">true</UsingMSVC>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
@@ -11,18 +15,30 @@
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
       <ExceptionHandling>false</ExceptionHandling>
       <PreprocessorDefinitions>_HAS_EXCEPTIONS=0;$(AdditionalForgeDefines);%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <WarningLevel>Level3</WarningLevel>
-      <TreatWarningAsError>true</TreatWarningAsError>
       <DebugInformationFormat>OldStyle</DebugInformationFormat>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <ForcedIncludeFiles>%(ForcedIncludeFiles)</ForcedIncludeFiles>
-      <DisableSpecificWarnings>4819;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <WarningsAsErrors>true</WarningsAsErrors>
+      <WarningLevel Condition="!$(UsingMSVC)">EnableWarnings</WarningLevel>
+      <WarningLevel Condition="$(UsingMSVC)">Level4</WarningLevel>
+      <DisableSpecificWarnings Condition="$(UsingMSVC)">4201;4324;4127%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
-  <ItemGroup />
+  <ItemDefinitionGroup Condition="'$(Platform)' == 'x64'">
+    <ClCompile>
+      <!-- When updating the sdk, you should only need to change the values in this file, and to copy the DLLs in the game/pc/D3D12 directory -->
+      <!-- General -->
+      <PreprocessorDefinitions>
+        D3D12_AGILITY_SDK=1;
+        D3D12_AGILITY_SDK_VERSION=611;
+        %(PreprocessorDefinitions)
+      </PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <ImportGroup Label="PropertySheets">
     <Import Condition="$(ProjectDir.Contains('Quest_VisualStudio2019'))" Project="$(TheForgeRoot)Examples_3\Unit_Tests\Quest_VisualStudio2019\Quest-arm64-v8a.props" />
     <Import Condition="$(ProjectDir.Contains('Android_VisualStudio2019'))" Project="$(TheForgeRoot)Examples_3\Unit_Tests\Android_VisualStudio2019\Android-arm64-v8a.props" />

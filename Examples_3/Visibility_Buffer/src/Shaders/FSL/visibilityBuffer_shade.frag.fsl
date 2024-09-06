@@ -36,40 +36,50 @@ STRUCT(VSOutput)
 {
 	DATA(float4, position, SV_Position);
 	DATA(float2, screenPos, TEXCOORD0);
+#if FT_MULTIVIEW
+    DATA(FLAT(uint), ViewID, TEXCOORD3);
+#endif
 };
 
 // Static descriptors
 #if(SAMPLE_COUNT > 1)
 	RES(Tex2DMS(float4, SAMPLE_COUNT), vbTex, UPDATE_FREQ_NONE, t0, binding = 14);
 #else
+#if FT_MULTIVIEW
+	RES(Tex2DArray(float4), vbTex, UPDATE_FREQ_NONE, t0, binding = 14);
+#else
 	RES(Tex2D(float4), vbTex, UPDATE_FREQ_NONE, t0, binding = 14);
-#endif
+#endif/*FT_MULTIVIEW*/
+#endif/*SAMPLE_COUNT > 1*/
 
 #if SAMPLE_COUNT > 1
     RES(Tex2DMS(float, SAMPLE_COUNT), depthTex, UPDATE_FREQ_NONE, t100, binding = 15);
 #else
+#if FT_MULTIVIEW
+	RES(Tex2DArray(float), depthTex, UPDATE_FREQ_NONE, t100, binding = 15);
+#else
     RES(Tex2D(float), depthTex, UPDATE_FREQ_NONE, t100, binding = 15);
-#endif
+#endif/*FT_MULTIVIEW*/
+#endif/*SAMPLE_COUNT > 1*/
 
 RES(Tex2D(float), shadowMap, UPDATE_FREQ_NONE, t101, binding = 16);
 
 #if defined(METAL) || defined(ORBIS) || defined(PROSPERO)
-	RES(Tex2D(float4), diffuseMaps[INSTANCE_BUFFER_SIZE],  UPDATE_FREQ_NONE, t0, binding = 17);
-	RES(Tex2D(float4), normalMaps[INSTANCE_BUFFER_SIZE],   UPDATE_FREQ_NONE, t1, binding = 17 + MAX_TEXTURE_UNITS);
-	RES(Tex2D(float4), specularMaps[INSTANCE_BUFFER_SIZE], UPDATE_FREQ_NONE, t2, binding = 17 + MAX_TEXTURE_UNITS * 2);
+	RES(Tex2D(float4), diffuseMaps[MAX_TEXTURE_UNITS],  UPDATE_FREQ_NONE, t0, binding = 17);
+	RES(Tex2D(float4), normalMaps[MAX_TEXTURE_UNITS],   UPDATE_FREQ_NONE, t1, binding = 17 + MAX_TEXTURE_UNITS);
+	RES(Tex2D(float4), specularMaps[MAX_TEXTURE_UNITS], UPDATE_FREQ_NONE, t2, binding = 17 + MAX_TEXTURE_UNITS * 2);
 #else
-	RES(Tex2D(float4), diffuseMaps[INSTANCE_BUFFER_SIZE],  space4, t0, binding = 17);
-	RES(Tex2D(float4), normalMaps[INSTANCE_BUFFER_SIZE],   space5, t0, binding = 17 + MAX_TEXTURE_UNITS);
-	RES(Tex2D(float4), specularMaps[INSTANCE_BUFFER_SIZE], space6, t0, binding = 17 + MAX_TEXTURE_UNITS * 2);
+	RES(Tex2D(float4), diffuseMaps[MAX_TEXTURE_UNITS],  space4, t0, binding = 17);
+	RES(Tex2D(float4), normalMaps[MAX_TEXTURE_UNITS],   space5, t0, binding = 17 + MAX_TEXTURE_UNITS);
+	RES(Tex2D(float4), specularMaps[MAX_TEXTURE_UNITS], space6, t0, binding = 17 + MAX_TEXTURE_UNITS * 2);
 #endif
 
 RES(ByteBuffer, vertexPos,           UPDATE_FREQ_NONE, t10, binding=0);
 RES(ByteBuffer, vertexTexCoord,      UPDATE_FREQ_NONE, t11, binding=1);
-RES(ByteBuffer, vertexNormal,        UPDATE_FREQ_NONE, t12, binding=2);
+RES(ByteBuffer, vertexNormal,        UPDATE_FREQ_NONE, t12, binding=3);
 RES(ByteBuffer, filteredIndexBuffer, UPDATE_FREQ_PER_FRAME, t14, binding=4);
 
-RES(Buffer(uint), indirectMaterialBuffer,       UPDATE_FREQ_PER_FRAME, t15, binding=5);
-RES(Buffer(uint), indirectDrawArgs, UPDATE_FREQ_PER_FRAME, t17, binding=9);
+RES(Buffer(uint), indirectDataBuffer,       UPDATE_FREQ_PER_FRAME, t15, binding=5);
 RES(Buffer(MeshConstants), meshConstantsBuffer, UPDATE_FREQ_NONE, t16, binding=6);
 RES(Buffer(LightData), lights,                  UPDATE_FREQ_NONE, t19, binding=11);
 
@@ -86,32 +96,29 @@ float4 PS_MAIN( VSOutput In, SV_SampleIndex(uint) i )
 #if(SAMPLE_COUNT > 1)
 	float4 visRaw = LoadTex2DMS(Get(vbTex), Get(depthSampler), uint2(In.position.xy), i);
 #else
+#if FT_MULTIVIEW
+	float4 visRaw = LoadTex3D(Get(vbTex), Get(depthSampler), uint3(In.position.xy, In.ViewID), 0);
+#else
 	float4 visRaw = LoadTex2D(Get(vbTex), Get(depthSampler), uint2(In.position.xy), 0);
-#endif
+#endif/*FT_MULTIVIEW*/
+#endif/*SAMPLE_COUNT > 1*/
+
 	// Unpack float4 render target data into uint to extract data
-	uint alphaBit_drawID_triID = packUnorm4x8(visRaw);
+	uint geomSetPrimID = packUnorm4x8(visRaw);
 
 	// Early exit if this pixel doesn't contain triangle data
-	if (alphaBit_drawID_triID == ~0u)
+	if (geomSetPrimID == ~0u)
 	{
 		discard;
 	}
 
 	// Extract packed data
-	uint drawID = (alphaBit_drawID_triID >> DRAW_ID_LOW_BIT) & 0x000000FF;
-	uint triangleID = (alphaBit_drawID_triID & PRIM_ID_MASK);
-	uint alpha1_opaque0 = (alphaBit_drawID_triID >> ALPH_IS_LOW_BIT);
+	uint primitiveID = (geomSetPrimID >> PRIM_ID_LOW_BIT) & PRIM_ID_MASK;
+	uint geomSet = (geomSetPrimID >> GEOM_LOW_BIT) & GEOM_MASK;
 
-	// This is the start vertex of the current draw batch
-	uint startIndexOffset = INDIRECT_DRAW_ARGUMENTS_START_INDEX_OFFSET;
-
-	// View is always 0, since only CAMERA_VIEW sets are stored
-	uint indirectStartElemIndex = GET_INDIRECT_DRAW_ELEM_INDEX(0, alpha1_opaque0, drawID * INDIRECT_DRAW_ARGUMENTS_STRUCT_NUM_ELEMENTS + startIndexOffset);
-	uint startIndex = Get(indirectDrawArgs)[indirectStartElemIndex];
-
-	uint triIdx0 = (triangleID * 3 + 0) + startIndex;
-	uint triIdx1 = (triangleID * 3 + 1) + startIndex;
-	uint triIdx2 = (triangleID * 3 + 2) + startIndex;
+	uint triIdx0 = INDEXBUFFER_OFFSET(geomSet) + (primitiveID * 3 + 0);
+	uint triIdx1 = INDEXBUFFER_OFFSET(geomSet) + (primitiveID * 3 + 1);
+	uint triIdx2 = INDEXBUFFER_OFFSET(geomSet) + (primitiveID * 3 + 2);
 
 	uint index0 = LoadByte(Get(filteredIndexBuffer), triIdx0 << 2);
 	uint index1 = LoadByte(Get(filteredIndexBuffer), triIdx1 << 2);
@@ -123,13 +130,24 @@ float4 PS_MAIN( VSOutput In, SV_SampleIndex(uint) i )
 	float3 v2pos = asfloat(LoadByte4(Get(vertexPos), index2 * 12)).xyz;
 
 	// Transform positions to clip space
-	float4 pos0 = mul(Get(transform)[VIEW_CAMERA].mvp, float4(v0pos, 1.0f));
-	float4 pos1 = mul(Get(transform)[VIEW_CAMERA].mvp, float4(v1pos, 1.0f));
-	float4 pos2 = mul(Get(transform)[VIEW_CAMERA].mvp, float4(v2pos, 1.0f));
+#if FT_MULTIVIEW
+	float4 pos0 = mul(Get(transform)[VIEW_CAMERA].mvp.mat[In.ViewID], float4(v0pos, 1.0f));
+	float4 pos1 = mul(Get(transform)[VIEW_CAMERA].mvp.mat[In.ViewID], float4(v1pos, 1.0f));
+	float4 pos2 = mul(Get(transform)[VIEW_CAMERA].mvp.mat[In.ViewID], float4(v2pos, 1.0f));
 
-	float4 wPos0 = mul(Get(transform)[VIEW_CAMERA].invVP,pos0);
-	float4 wPos1 = mul(Get(transform)[VIEW_CAMERA].invVP,pos1);
-	float4 wPos2 = mul(Get(transform)[VIEW_CAMERA].invVP,pos2);
+	float4 wPos0 = mul(Get(transform)[VIEW_CAMERA].invVP.mat[In.ViewID],pos0);
+	float4 wPos1 = mul(Get(transform)[VIEW_CAMERA].invVP.mat[In.ViewID],pos1);
+	float4 wPos2 = mul(Get(transform)[VIEW_CAMERA].invVP.mat[In.ViewID],pos2);
+#else
+	float4 pos0 = mul(Get(transform)[VIEW_CAMERA].mvp.mat, float4(v0pos, 1.0f));
+	float4 pos1 = mul(Get(transform)[VIEW_CAMERA].mvp.mat, float4(v1pos, 1.0f));
+	float4 pos2 = mul(Get(transform)[VIEW_CAMERA].mvp.mat, float4(v2pos, 1.0f));
+
+	float4 wPos0 = mul(Get(transform)[VIEW_CAMERA].invVP.mat,pos0);
+	float4 wPos1 = mul(Get(transform)[VIEW_CAMERA].invVP.mat,pos1);
+	float4 wPos2 = mul(Get(transform)[VIEW_CAMERA].invVP.mat,pos2);
+
+#endif
 
 	float2 two_over_windowsize = Get(twoOverRes);
 
@@ -149,41 +167,38 @@ float4 PS_MAIN( VSOutput In, SV_SampleIndex(uint) i )
 
 	// Reconstruct the Z value at this screen point performing only the necessary matrix * vector multiplication
 	// operations that involve computing Z
-	float z = w * getElem(Get(transform)[VIEW_CAMERA].projection, 2, 2) + getElem(Get(transform)[VIEW_CAMERA].projection, 3, 2);
+#if FT_MULTIVIEW
+	float z = w * getElem(Get(transform)[VIEW_CAMERA].projection.mat[In.ViewID], 2, 2) + getElem(Get(transform)[VIEW_CAMERA].projection.mat[In.ViewID], 3, 2);
+#else
+	float z = w * getElem(Get(transform)[VIEW_CAMERA].projection.mat, 2, 2) + getElem(Get(transform)[VIEW_CAMERA].projection.mat, 3, 2);
+#endif
 
 	// Calculate the world position coordinates:
 	// First the projected coordinates at this point are calculated using In.screenPos and the computed Z value at this point.
 	// Then, multiplying the perspective projected coordinates by the inverse view-projection matrix (invVP) produces world coordinates
-	float3 position = mul(Get(transform)[VIEW_CAMERA].invVP, float4(In.screenPos * w, z, w)).xyz;
+
+#if FT_MULTIVIEW
+	float3 position = mul(Get(transform)[VIEW_CAMERA].invVP.mat[In.ViewID], float4(In.screenPos * w, z, w)).xyz;
+#else
+	float3 position = mul(Get(transform)[VIEW_CAMERA].invVP.mat, float4(In.screenPos * w, z, w)).xyz;
+#endif
 
 #if defined(USE_RAY_DIFFERENTIALS)
-	float3 positionDX = mul(Get(transform)[VIEW_CAMERA].invVP, float4((In.screenPos+two_over_windowsize.x/2) * w, z, w)).xyz;
-	float3 positionDY = mul(Get(transform)[VIEW_CAMERA].invVP, float4((In.screenPos+two_over_windowsize.y/2) * w, z, w)).xyz;
+#if FT_MULTIVIEW
+	float3 positionDX = mul(Get(transform)[VIEW_CAMERA].invVP.mat[In.ViewID], float4((In.screenPos+two_over_windowsize.x/2) * w, z, w)).xyz;
+	float3 positionDY = mul(Get(transform)[VIEW_CAMERA].invVP.mat[In.ViewID], float4((In.screenPos+two_over_windowsize.y/2) * w, z, w)).xyz;
+#else
+	float3 positionDX = mul(Get(transform)[VIEW_CAMERA].invVP.mat, float4((In.screenPos+two_over_windowsize.x/2) * w, z, w)).xyz;
+	float3 positionDY = mul(Get(transform)[VIEW_CAMERA].invVP.mat, float4((In.screenPos+two_over_windowsize.y/2) * w, z, w)).xyz;
+#endif /*FT_MULTIVIEW*/
 
 	derivativesOut = CalcRayBary(wPos0.xyz,wPos1.xyz,wPos2.xyz,position,positionDX,positionDY,
 												Get(camPos).xyz);
-#endif
+#endif/*USE_RAY_DIFFERENTIALS*/
+
 
 	/////////////LOAD///////////////////////////////
-	// BaseInstanceBuffer returns constant offset values
-	// The following value defines the maximum amount of indirect draw calls that will be 
-	// drawn at once. This value depends on the number of submeshes or individual objects 
-	// in the scene. Changing a scene will require to change this value accordingly.
-	// #define MAX_DRAWS_INDIRECT 300 
-	//
-	// These values are offsets used to point to the material data depending on the 
-	// type of geometry and on the culling view
-	// #define MATERIAL_BASE_ALPHA0 0
-	// #define MATERIAL_BASE_NOALPHA0 MAX_DRAWS_INDIRECT
-	// #define MATERIAL_BASE_ALPHA1 (MAX_DRAWS_INDIRECT*2)
-	// #define MATERIAL_BASE_NOALPHA1 (MAX_DRAWS_INDIRECT*3)
-	uint materialBaseSlot = BaseInstanceBuffer(alpha1_opaque0, VIEW_CAMERA);
-
-	// potential results for materialBaseSlot + drawID are
-	// 0 - 299 - shadow alpha
-	// 300 - 599 - shadow no alpha
-	// 600 - 899 - camera alpha
-	uint materialID = Get(indirectMaterialBuffer)[materialBaseSlot + drawID];
+	uint materialID = Get(indirectDataBuffer)[index0];
 
 	// Interpolate texture coordinates and calculate the gradients for texture sampling with mipmapping support
 	GradientInterpolationResults results = Interpolate2DWithDeriv(derivativesOut,texCoords);
@@ -231,8 +246,12 @@ float4 PS_MAIN( VSOutput In, SV_SampleIndex(uint) i )
 	normal = perturb_normal(reconstructedNormalMap, normal, wPosDer, uvDer);
 
 	// Sample Diffuse color
-	float4 posLS = mul(Get(transform)[VIEW_SHADOW].vp, float4(position, 1.0f));
-	
+#if FT_MULTIVIEW
+	float4 posLS = mul(Get(transform)[VIEW_SHADOW].vp.mat[In.ViewID], float4(position, 1.0f));
+#else
+	float4 posLS = mul(Get(transform)[VIEW_SHADOW].vp.mat, float4(position, 1.0f));
+#endif
+
 	float Roughness = clamp(specularColor.a, 0.05f, 0.99f);
 	float Metallic = specularColor.b;
 
@@ -247,7 +266,7 @@ float4 PS_MAIN( VSOutput In, SV_SampleIndex(uint) i )
 		Get(depthTex),
 		Get(depthSampler));
 
-	bool isTwoSided = (alpha1_opaque0 == 1) && bool(Get(meshConstantsBuffer)[materialID].twoSided);
+	bool isTwoSided = (geomSet == GEOMSET_ALPHA_CUTOUT) && bool(Get(meshConstantsBuffer)[materialID].twoSided);
 	bool isBackFace = false;
 
 	float3 ViewVec = normalize(Get(camPos).xyz - position.xyz);

@@ -661,6 +661,7 @@ typedef enum TextureCreationFlags
     /// Creates resolve attachment for auto resolve (MSAA on tiled architecture - Resolve can be done on tile through render pass)
     TEXTURE_CREATION_FLAG_CREATE_RESOLVE_ATTACHMENT = 0x10000,
 #endif
+    TEXTURE_CREATION_FLAG_SAMPLE_LOCATIONS_COMPATIBLE = 0x20000
 } TextureCreationFlags;
 MAKE_ENUM_FLAG(uint32_t, TextureCreationFlags)
 
@@ -1197,9 +1198,7 @@ typedef struct DEFINE_ALIGNED(Texture, 64)
                 id<MTLTexture> __strong* pUAVDescriptors;
                 id<MTLTexture>           pStencilTexture;
             };
-            id       mpsTextureAllocator;
-            uint32_t pPixelFormat;
-            uint32_t mRT : 1;
+            id mpsTextureAllocator;
         };
 #endif
 #if defined(DIRECT3D11)
@@ -1888,6 +1887,13 @@ typedef struct MarkerDesc
 #if !defined(PROSPERO) && !defined(XBOX)
 #define GPU_MARKER_SIZE                        sizeof(uint32_t)
 #define GPU_MARKER_VALUE(markerBuffer, offset) (*((uint32_t*)markerBuffer->pCpuMappedAddress) + ((offset) / GPU_MARKER_SIZE))
+#endif
+
+#if !defined(GFX_ESRAM_ALLOCATIONS)
+#define ESRAM_BEGIN_ALLOC(...)
+#define ESRAM_CURRENT_OFFSET(...) 0u
+#define ESRAM_END_ALLOC(...)
+#define ESRAM_RESET_ALLOCS(...)
 #endif
 
 typedef struct DEFINE_ALIGNED(Cmd, 64)
@@ -2956,8 +2962,10 @@ typedef struct GPUSettings
     uint32_t mRayQuerySupported : 1;
     uint32_t mSoftwareVRSSupported : 1;
     uint32_t mPrimitiveIdSupported : 1;
+    uint32_t m64BitAtomicsSupported : 1;
 #if defined(DIRECT3D11) || defined(DIRECT3D12)
     D3D_FEATURE_LEVEL mFeatureLevel;
+    uint32_t          mSuppressInvalidSubresourceStateAfterExit : 1;
 #endif
 #if defined(VULKAN)
     uint32_t mDynamicRenderingSupported : 1;
@@ -3000,8 +3008,10 @@ typedef struct DEFINE_ALIGNED(Renderer, 64)
             ID3D12Device*                            pDevice;
 #endif
 #if defined(_WINDOWS) && defined(FORGE_DEBUG)
-            ID3D12InfoQueue* pDebugValidation;
-            bool             mSuppressMismatchingCommandListDuringPresent;
+            ID3D12InfoQueue1* pDebugValidation;
+            DWORD             mCallbackCookie;
+            bool              mUseDebugCallback;
+            bool              mSuppressMismatchingCommandListDuringPresent;
 #endif
         } mDx;
 #endif
@@ -3171,6 +3181,7 @@ typedef struct GpuInfo
             uint32_t                    mAccelerationStructureExtension : 1;
             uint32_t                    mRayTracingPipelineExtension : 1;
             uint32_t                    mRayQueryExtension : 1;
+            uint32_t                    mShaderAtomicInt64Extension : 1;
             uint32_t                    mBufferDeviceAddressFeature : 1;
             uint32_t                    mShaderFloatControlsExtension : 1;
             uint32_t                    mSpirv14Extension : 1;

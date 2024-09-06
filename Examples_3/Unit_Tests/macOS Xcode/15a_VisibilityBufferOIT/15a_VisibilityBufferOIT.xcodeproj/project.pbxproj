@@ -657,7 +657,44 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "DST=\"$CONFIGURATION_BUILD_DIR/$CONTENTS_FOLDER_PATH/Resources\"\nART=\"$SRCROOT/../../../../Art/SanMiguel_3\"\nASSETS=\"$SRCROOT/../../UnitTestResources\"\nSRC=\"$SRCROOT/../../src/15a_VisibilityBufferOIT\"\nMID=\"$SRCROOT/../../../Middleware_3\"\n# Src\n# Textures\nrsync -u -rv --include '*/' --include '*.tex' --exclude '*' --prune-empty-dirs \"$ART/Textures/dds/\" \"$DST/Textures/\"\n# Camera Path\nrsync -u -r \"$ASSETS/cameraPath.bin\" \"$DST\"\n# Meshes\nrsync -u -r \"$ART/Meshes/\" \"$DST/Meshes\"\n# Common resources (Shaders, Fonts, Scripts, GPUCfg)\n# Path is The-Forge/Examples_3/Unit_Tests/macOS Xcode/common_post_build.command\n/bin/sh \"$SRCROOT/../common_post_build.command\" \"$SRC\" \"$SRCROOT\" \"$ASSETS\" \"$DST\"\n\n# Stormtrooper\nmkdir -p \"$DST/Animations/stormtrooper/\"\nmkdir -p \"$DST/Meshes/stormtrooper/\"\nrsync -u -r \"$ASSETS/Animation/stormtrooper/animations/\" \"$DST/Animations/stormtrooper\"\nrsync -u \"$ASSETS/Animation/stormtrooper/skeleton.ozz\" \"$DST/Animations/stormtrooper\"\nrsync -u \"$ASSETS/Animation/stormtrooper/riggedMesh.bin\" \"$DST/Meshes/stormtrooper/\"\nrsync -u \"$ASSETS/Textures/dds/Stormtrooper_D.tex\" \"$DST/Textures/\"\n";
+			shellScript = "DST=\"$CONFIGURATION_BUILD_DIR/$CONTENTS_FOLDER_PATH/Resources\"\nART=\"$SRCROOT/../../../../Art/SanMiguel_3\"\nASSETS=\"$SRCROOT/../../../../Art/UnitTestResources\"\nSRC=\"$SRCROOT/../../src/15a_VisibilityBufferOIT\"\nMID=\"$SRCROOT/../../../Middleware_3\"\n# Src\n# Textures\nrsync -u -rv --include '*/' --include '*.tex' --exclude '*' --prune-empty-dirs \"$ART/Textures/dds/\" \"$DST/Textures/\"\n# Camera Path\nrsync -u -r \"$ASSETS/cameraPath.bin\" \"$DST\"\n# Meshes\nrsync -u -r \"$ART/Meshes/\" \"$DST/Meshes\"\n# Common resources (Shaders, Fonts, Scripts, GPUCfg)\n# Path is The-Forge/Examples_3/Unit_Tests/macOS Xcode/common_post_build.command\n/bin/sh \"$SRCROOT/../common_post_build.command\" \"$SRC\" \"$SRCROOT\" \"$ASSETS\" \"$DST\"\n\n# Stormtrooper\nmkdir -p \"$DST/Animations/stormtrooper/\"\nmkdir -p \"$DST/Meshes/stormtrooper/\"\nrsync -u -r \"$ASSETS/Animation/stormtrooper/animations/\" \"$DST/Animations/stormtrooper\"\nrsync -u \"$ASSETS/Animation/stormtrooper/skeleton.ozz\" \"$DST/Animations/stormtrooper\"\nrsync -u \"$ASSETS/Animation/stormtrooper/riggedMesh.bin\" \"$DST/Meshes/stormtrooper/\"\nrsync -u \"$ASSETS/Textures/dds/Stormtrooper_D.tex\" \"$DST/Textures/\"\n";
+		};
+		64E7CB752BA315F7001228C4 /* Run Script */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Run Script";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "DST=\"$CONFIGURATION_BUILD_DIR/$CONTENTS_FOLDER_PATH\"\nART=\"$SRCROOT/../../../../Art/SanMiguel_3\"\nASSETS=\"$SRCROOT/../../../../Art/UnitTestResources\"\nSRC=\"$SRCROOT/../../src/15a_VisibilityBufferOIT\"\nMID=\"$SRCROOT/../../../Middleware_3\"\n# Src\n# Textures\nrsync -u -rv --include '*/' --include '*.tex' --exclude '*' --prune-empty-dirs \"$ART/Textures/ktx/\" \"$DST/Textures/\"\nrsync -u -r \"$ASSETS/Textures/ktx/circlepad.tex\" \"$DST/Textures/\"\n# Camera Path\nrsync -u -r \"$ASSETS/cameraPath.bin\" \"$DST\"\n# Meshes\nrsync -u -r \"$ART/Meshes/\" \"$DST/Meshes\"\n# Stormtrooper\nmkdir -p \"$DST/Animations/stormtrooper/\"\nmkdir -p \"$DST/Meshes/stormtrooper/\"\nrsync -u -r \"$ASSETS/Animation/stormtrooper/animations/\" \"$DST/Animations/stormtrooper\"\nrsync -u \"$ASSETS/Animation/stormtrooper/skeleton.ozz\" \"$DST/Animations/stormtrooper\"\nrsync -u \"$ASSETS/Animation/stormtrooper/riggedMesh.bin\" \"$DST/Meshes/stormtrooper/\"\nrsync -u \"$ASSETS/Textures/ktx/Stormtrooper_D.tex\" \"$DST/Textures/\"\n# Common resources (Shaders, Fonts, Scripts, GPUCfg)\n# Path is The-Forge/Examples_3/Unit_Tests/macOS Xcode/common_post_build.command\n/bin/sh \"$SRCROOT/../common_post_build.command\" \"$SRC\" \"$SRCROOT\" \"$ASSETS\" \"$DST\"\n";
+		};
+		64E7CB762BA315F7001228C4 /* ShellScript */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "[[ $CONFIGURATION = \"Debug\" ]] && debug=\"--debug\"\n\npython3 ../../../../Common_3/Tools/ForgeShadingLanguage/fsl.py --verbose \"$SRCROOT/../../src/$PROJECT_NAME/Shaders/FSL/ShaderList.fsl\" -d \"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Shaders/\" -b \"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/CompiledShaders\" -i \"${OBJROOT}\" --cache-args -l IOS --incremental --compile $debug\n";
+			showEnvVarsInLog = 0;
 		};
 		64E7CB752BA315F7001228C4 /* Run Script */ = {
 			isa = PBXShellScriptBuildPhase;

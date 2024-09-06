@@ -81,6 +81,8 @@ class Features(Enum):
     ICB = 6, # indirect command
     VDP, = 7, # Vertex Draw Parameters
     INVARIANT = 8,
+    ATOMICS_64 = 9,
+    DYNAMIC_RESOURCES = 10,
 
 feature_mask = { f: [] for f in Features }
 feature_mask[Features.MULTIVIEW] = [Platforms.QUEST]
@@ -606,12 +608,17 @@ def collect_shader_decl(args, filepath: str, platforms, regen, dependencies, bin
                 sys.exit(1)
             binary.filename, _ = decl.pop(), decl.pop(0)
             binary.features = list(global_features)
+            embed_ext = False
+            if Features.MULTIVIEW in global_features:
+                    embed_ext = True
             for flag in [ f[3:] for f in decl if f.startswith('FT_')]:
                 if flag in Features._member_names_:
                     binary.features += [Features[flag]]
                     # Implicetly embed fsl_ext.h when multiview is requested
                     if Features.MULTIVIEW == Features[flag]:
-                        meta_source += [ b'#include "fsl_ext.h"\n' ]
+                        embed_ext = True
+            if embed_ext:
+                meta_source += [ b'#include "fsl_ext.h"\n' ]
                     
             binary_macro = abs(hash(binary))
             if binary_macro not in binary_identifiers:
@@ -643,6 +650,7 @@ def collect_shader_decl(args, filepath: str, platforms, regen, dependencies, bin
         for platform in platforms:
             cmd = pp + [
                 *include_dirs,
+                '-D__fsl',
                 f'-DD_{abs(hash(binary))}',
                 f'-D{platform_langs[platform]}',
                 f'-DTARGET_{get_target(platform)}',
@@ -754,7 +762,11 @@ def isBaseType(dtype):
         'void',
         'int',
         'uint',
+		'uint2',
+		'uint3',
+		'uint4',
         'atomic_uint',
+        'uint64_t',
         'float',
         'float2',
         'float3',

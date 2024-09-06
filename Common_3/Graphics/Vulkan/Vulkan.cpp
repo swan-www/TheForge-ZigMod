@@ -299,6 +299,10 @@ const char* gVkWantedDeviceExtensions[] =
 	VK_KHR_MAINTENANCE3_EXTENSION_NAME,
 	// Required by raytracing and the new bindless descriptor API if we use it in future
 	VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+    /************************************************************************/
+    // Shader Atomic Int 64 Extension
+    /************************************************************************/
+    VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME,
 	/************************************************************************/
 	// Raytracing
 	/************************************************************************/
@@ -503,23 +507,35 @@ uint64_t GetDriverMemoryPerObject(uint32_t obj)
     }
     return ret;
 }
+
+void* gVkAllocation(void* pUserData, size_t size, size_t alignment, VkSystemAllocationScope allocationScope);
+void* gVkReallocation(void* pUserData, void* pOriginal, size_t size, size_t alignment, VkSystemAllocationScope allocationScope);
+void  gVkFree(void* pUserData, void* pMemory);
+
 #endif
 
 VkAllocationCallbacks* GetAllocationCallbacks(VkObjectType type)
 {
+    UNREF_PARAM(type);
     // clang-format off
     static VkAllocationCallbacks defaultCallbacks = {
         NULL,
         [](void* pUserData, size_t size, size_t alignment, VkSystemAllocationScope allocationScope) -> void*
         {
+            UNREF_PARAM(pUserData); 
+            UNREF_PARAM(allocationScope); 
             return tf_memalign(alignment, size);
         },
         [](void* pUserData, void* pOriginal, size_t size, size_t alignment, VkSystemAllocationScope allocationScope) -> void*
         {
+            UNREF_PARAM(pUserData); 
+            UNREF_PARAM(alignment); 
+            UNREF_PARAM(allocationScope); 
             return tf_realloc(pOriginal, size);
         },
         [](void* pUserData, void* pMemory)
         {
+            UNREF_PARAM(pUserData); 
             SAFE_FREE(pMemory);
         }
     };
@@ -533,69 +549,9 @@ VkAllocationCallbacks* GetAllocationCallbacks(VkObjectType type)
 
     static VkAllocationCallbacks trackingCallbacks = {
         NULL,
-        [](void* pUserData, size_t size, size_t alignment, VkSystemAllocationScope allocationScope) -> void*
-        {
-            static constexpr size_t kTrackingDataAlignment = 32;
-            VkObjectType            type = (VkObjectType)(*(uint32_t*)pUserData);
-
-            tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryPerObject[type][allocationScope], size);
-            tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryTotal, size);
-
-            tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryAllocsPerObject[type][allocationScope], 1);
-            tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryAllocCount, 1);
-
-            alignment = max(alignment, kTrackingDataAlignment);
-            uint8_t*        ret = (uint8_t*)tf_memalign(alignment, size + alignment);
-            VkMemoryHeader* header = (VkMemoryHeader*)ret;
-            header->size = size;
-            header->allocationScope = allocationScope;
-            header->type = type;
-
-            *(size_t*)(ret + alignment - sizeof(size_t)) = alignment;
-            return ret + alignment;
-        },
-        [](void* pUserData, void* pOriginal, size_t size, size_t alignment, VkSystemAllocationScope allocationScope) -> void*
-        {
-            if (!pOriginal)
-            {
-                VkObjectType type = static_cast<VkObjectType>(*reinterpret_cast<uint32_t*>(pUserData));
-                return GetAllocationCallbacks(type)->pfnAllocation(pUserData, size, alignment, allocationScope);
-            }
-            uint8_t* mem = (uint8_t*)pOriginal;
-            alignment = *(size_t*)(mem - sizeof(size_t));
-            VkMemoryHeader* header = (VkMemoryHeader*)(mem - alignment);
-
-            // Subtract previous size
-            tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryPerObject[header->type][header->allocationScope], -(int64_t)header->size);
-            tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryTotal, -(int64_t)header->size);
-
-            // Add new size
-            tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryPerObject[header->type][header->allocationScope], size);
-            tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryTotal, size);
-
-            uint8_t* ret = (uint8_t*)tf_realloc(header, size + alignment);
-            header = (VkMemoryHeader*)ret;
-            header->size = size;
-            return ret + alignment;
-        },
-        [](void* pUserData, void* pMemory)
-        {
-            if (!pMemory)
-            {
-                return;
-            }
-
-            uint8_t*        mem = (uint8_t*)pMemory;
-            size_t          alignment = *(size_t*)(mem - sizeof(size_t));
-            VkMemoryHeader* header = (VkMemoryHeader*)(mem - alignment);
-
-            tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryPerObject[header->type][header->allocationScope], -(int64_t)(header->size));
-            tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryAllocsPerObject[header->type][header->allocationScope], -(int64_t)1);
-            tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryTotal, -(int64_t)(header->size));
-            tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryAllocCount, -1);
-
-            tf_free(header);
-        }
+        gVkAllocation,
+        gVkReallocation,
+        gVkFree,
     };
 
     static VkAllocationCallbacks objectCallbacks[VK_TRACKED_OBJECT_TYPE_COUNT];
@@ -619,7 +575,74 @@ VkAllocationCallbacks* GetAllocationCallbacks(VkObjectType type)
 #endif
 }
 
-#ifdef GFX_DEVICE_MEMORY_TRACKING
+#if defined(GFX_DRIVER_MEMORY_TRACKING)
+void* gVkAllocation(void* pUserData, size_t size, size_t alignment, VkSystemAllocationScope allocationScope)
+{
+    static constexpr size_t kTrackingDataAlignment = 32;
+    VkObjectType            type = (VkObjectType)(*(uint32_t*)pUserData);
+
+    tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryPerObject[type][allocationScope], size);
+    tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryTotal, size);
+
+    tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryAllocsPerObject[type][allocationScope], 1);
+    tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryAllocCount, 1);
+
+    alignment = max(alignment, kTrackingDataAlignment);
+    uint8_t*        ret = (uint8_t*)tf_memalign(alignment, size + alignment);
+    VkMemoryHeader* header = (VkMemoryHeader*)ret;
+    header->size = size;
+    header->allocationScope = allocationScope;
+    header->type = type;
+
+    *(size_t*)(ret + alignment - sizeof(size_t)) = alignment;
+    return ret + alignment;
+}
+
+void* gVkReallocation(void* pUserData, void* pOriginal, size_t size, size_t alignment, VkSystemAllocationScope allocationScope)
+{
+    if (!pOriginal)
+    {
+        VkObjectType type = static_cast<VkObjectType>(*reinterpret_cast<uint32_t*>(pUserData));
+        return GetAllocationCallbacks(type)->pfnAllocation(pUserData, size, alignment, allocationScope);
+    }
+    uint8_t* mem = (uint8_t*)pOriginal;
+    alignment = *(size_t*)(mem - sizeof(size_t));
+    VkMemoryHeader* header = (VkMemoryHeader*)(mem - alignment);
+
+    // Subtract previous size
+    tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryPerObject[header->type][header->allocationScope], -(int64_t)header->size);
+    tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryTotal, -(int64_t)header->size);
+
+    // Add new size
+    tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryPerObject[header->type][header->allocationScope], size);
+    tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryTotal, size);
+
+    uint8_t* ret = (uint8_t*)tf_realloc(header, size + alignment);
+    header = (VkMemoryHeader*)ret;
+    header->size = size;
+    return ret + alignment;
+}
+
+void gVkFree(void* pUserData, void* pMemory)
+{
+    UNREF_PARAM(pUserData);
+    if (!pMemory)
+    {
+        return;
+    }
+
+    uint8_t*        mem = (uint8_t*)pMemory;
+    size_t          alignment = *(size_t*)(mem - sizeof(size_t));
+    VkMemoryHeader* header = (VkMemoryHeader*)(mem - alignment);
+
+    tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryPerObject[header->type][header->allocationScope], -(int64_t)(header->size));
+    tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryAllocsPerObject[header->type][header->allocationScope], -(int64_t)1);
+    tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryTotal, -(int64_t)(header->size));
+    tfrg_atomic64_add_relaxed(&gDriverMemStats.mMemoryAllocCount, -1);
+
+    tf_free(header);
+}
+
 typedef struct VkObjectMemoryNode
 {
     uint64_t key;
@@ -653,6 +676,7 @@ uint64_t GetDeviceMemoryPerObject(uint32_t obj) { return gDeviceMemStats.mMemory
 
 static void MemoryReportCallback(const VkDeviceMemoryReportCallbackDataEXT* pCallbackData, void* pUserData)
 {
+    UNREF_PARAM(pUserData);
     if (!pCallbackData)
     {
         return;
@@ -700,11 +724,11 @@ static void MemoryReportCallback(const VkDeviceMemoryReportCallbackDataEXT* pCal
     // Deallocation
     if (pCallbackData->type == VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_FREE_EXT)
     {
-        int currObjIndex = (int)hmgeti(gDeviceMemStats.mMemoryMap, pCallbackData->memoryObjectId);
+        int objIndex = (int)hmgeti(gDeviceMemStats.mMemoryMap, pCallbackData->memoryObjectId);
 
-        if (currObjIndex != -1)
+        if (objIndex != -1)
         {
-            uint64_t size = gDeviceMemStats.mMemoryMap[currObjIndex].value;
+            uint64_t size = gDeviceMemStats.mMemoryMap[objIndex].value;
 
             tfrg_atomic64_add_relaxed(&gDeviceMemStats.mMemoryTotal, -(int64_t)size);
             tfrg_atomic64_add_relaxed(&gDeviceMemStats.mMemoryAllocCount, -(int64_t)1);
@@ -1372,6 +1396,8 @@ static VkBool32 VKAPI_PTR DebugUtilsCallback(VkDebugUtilsMessageSeverityFlagBits
                                              VkDebugUtilsMessageTypeFlagsEXT             messageType,
                                              const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
 {
+    UNREF_PARAM(messageType);
+    UNREF_PARAM(pUserData);
     const char* pLayerPrefix = pCallbackData->pMessageIdName;
     const char* pMessage = pCallbackData->pMessage;
     int32_t     messageCode = pCallbackData->messageIdNumber;
@@ -1401,6 +1427,16 @@ static VkBool32 VKAPI_PTR DebugUtilsCallback(VkDebugUtilsMessageSeverityFlagBits
             // https://github.com/KhronosGroup/Vulkan-Docs/issues/152
             // https://www.khronos.org/blog/resolving-longstanding-issues-with-wsi
             -1588160456,
+
+        // These validation errors only happen in debug builds and are caused by the function vrapi_SubmitFrame2(pQuest->pOvr, &frameDesc)
+        // in VrApiHooks.cpp when trying to present a frame.
+        // Ignorning them because they have to do with the implementation of the function
+        // and with VrApi being deprecated there won't be an update to fix it.
+#if defined(QUEST_VR)
+            369360862,
+            448332540,
+            1755645774
+#endif
         };
 
         bool ignoreError = false;
@@ -1437,6 +1473,10 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DebugReportCallback(VkDebugReportFlagsEXT 
                                                           uint64_t object, size_t location, int32_t messageCode, const char* pLayerPrefix,
                                                           const char* pMessage, void* pUserData)
 {
+    UNREF_PARAM(object);
+    UNREF_PARAM(objectType);
+    UNREF_PARAM(location);
+    UNREF_PARAM(pUserData);
     if (flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT)
     {
         LOGF(LogLevel::eINFO, "[%s] : %s (%i)", pLayerPrefix, pMessage, messageCode);
@@ -2072,6 +2112,7 @@ VkImageUsageFlags util_to_vk_image_usage_flags(ResourceState startState)
 
 uint32_t util_vk_image_array_size(const TextureDesc* pDesc, VkImageUsageFlags usageFlags)
 {
+    UNREF_PARAM(usageFlags);
     uint arraySize = pDesc->mArraySize;
 #if defined(QUEST_VR)
     const VkImageUsageFlags renderTargetUsageFlags = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
@@ -2704,6 +2745,8 @@ static bool QueryGpuSettings(const RendererContextDesc* pDesc, RendererContext* 
                             pGpu->mVk.mAccelerationStructureExtension = true;
                         if (strcmp(wantedDeviceExtensions[k], VK_KHR_SPIRV_1_4_EXTENSION_NAME) == 0)
                             pGpu->mVk.mSpirv14Extension = true;
+                        if (strcmp(wantedDeviceExtensions[k], VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME) == 0)
+                            pGpu->mVk.mShaderAtomicInt64Extension = true;
                         if (strcmp(wantedDeviceExtensions[k], VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) == 0)
                             pGpu->mVk.mRayTracingPipelineExtension = true;
                         if (strcmp(wantedDeviceExtensions[k], VK_KHR_RAY_QUERY_EXTENSION_NAME) == 0)
@@ -2769,6 +2812,11 @@ static bool QueryGpuSettings(const RendererContextDesc* pDesc, RendererContext* 
     };
     ADD_TO_NEXT_CHAIN(pGpu->mVk.mDynamicRenderingExtension, dynamicRenderingFeatures);
 
+    VkPhysicalDeviceShaderAtomicInt64Features shaderAtomicInt64Features = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_INT64_FEATURES_KHR
+    };
+    ADD_TO_NEXT_CHAIN(pGpu->mVk.mShaderAtomicInt64Extension, shaderAtomicInt64Features);
+
     VkPhysicalDeviceBufferDeviceAddressFeatures bufferDeviceAddressFeatures = {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES
     };
@@ -2813,6 +2861,8 @@ static bool QueryGpuSettings(const RendererContextDesc* pDesc, RendererContext* 
 
     const bool bufferDeviceAddressFeature = bufferDeviceAddressFeatures.bufferDeviceAddress;
     pGpu->mVk.mBufferDeviceAddressSupported = bufferDeviceAddressFeature;
+
+    pGpu->mSettings.m64BitAtomicsSupported = shaderAtomicInt64Features.shaderBufferInt64Atomics;
 
     const bool rayTracingPipelineFeature = rayTracingPipelineFeatures.rayTracingPipeline;
     const bool accelerationStructureFeature = accelerationStructureFeatures.accelerationStructure;
@@ -3064,7 +3114,8 @@ void InitializeImageCreateInfo(Renderer* pRenderer, const TextureDesc* pDesc, Vk
     DECLARE_ZERO(VkImageCreateInfo, add_info);
     add_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     add_info.pNext = NULL;
-    add_info.flags = 0;
+    add_info.flags =
+        pDesc->mFlags & TEXTURE_CREATION_FLAG_SAMPLE_LOCATIONS_COMPATIBLE ? VK_IMAGE_CREATE_SAMPLE_LOCATIONS_COMPATIBLE_DEPTH_BIT_EXT : 0;
     add_info.imageType = image_type;
     add_info.format = (VkFormat)TinyImageFormat_ToVkFormat(pDesc->mFormat);
     add_info.extent.width = pDesc->mWidth;
@@ -3705,6 +3756,11 @@ static bool AddDevice(const RendererDesc* pDesc, Renderer* pRenderer)
     };
     ADD_TO_NEXT_CHAIN(pGpu->mVk.mDynamicRenderingExtension, dynamicRenderingFeatures);
 
+    VkPhysicalDeviceShaderAtomicInt64Features shaderAtomicInt64Features = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_INT64_FEATURES_KHR
+    };
+    ADD_TO_NEXT_CHAIN(pGpu->mVk.mShaderAtomicInt64Extension, shaderAtomicInt64Features);
+
     VkPhysicalDeviceBufferDeviceAddressFeatures bufferDeviceAddressFeatures = {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES
     };
@@ -3890,6 +3946,11 @@ static bool AddDevice(const RendererDesc* pDesc, Renderer* pRenderer)
     if (pGpu->mSettings.mRayQuerySupported)
     {
         LOGF(LogLevel::eINFO, "Successfully loaded Khronos Ray Query extensions");
+    }
+
+    if (pGpu->mSettings.m64BitAtomicsSupported)
+    {
+        LOGF(LogLevel::eINFO, "Successfully loaded 64 bit Shader Atomic extension");
     }
 
     if (pGpu->mSettings.mDynamicRenderingSupported)
@@ -6025,9 +6086,9 @@ void vk_addDescriptorSet(Renderer* pRenderer, const DescriptorSetDesc* pDesc, De
     DescriptorSet* pDescriptorSet = (DescriptorSet*)tf_calloc_memalign(1, alignof(DescriptorSet), totalSize);
 
     pDescriptorSet->mVk.pRootSignature = pRootSignature;
-    pDescriptorSet->mVk.mUpdateFrequency = updateFreq;
-    pDescriptorSet->mVk.mDynamicOffsetCount = dynamicOffsetCount;
-    pDescriptorSet->mVk.mNodeIndex = nodeIndex;
+    pDescriptorSet->mVk.mUpdateFrequency = (uint8_t)updateFreq;
+    pDescriptorSet->mVk.mDynamicOffsetCount = (uint8_t)dynamicOffsetCount;
+    pDescriptorSet->mVk.mNodeIndex = (uint8_t)nodeIndex;
     pDescriptorSet->mVk.mMaxSets = pDesc->mMaxSets;
 
     uint8_t* pMem = (uint8_t*)(pDescriptorSet + 1);
@@ -6058,7 +6119,7 @@ void vk_addDescriptorSet(Renderer* pRenderer, const DescriptorSetDesc* pDesc, De
         for (uint32_t descIndex = 0; descIndex < pRootSignature->mDescriptorCount; ++descIndex)
         {
             const DescriptorInfo* descInfo = &pRootSignature->pDescriptors[descIndex];
-            if (descInfo->mUpdateFrequency != updateFreq || descInfo->mRootDescriptor || descInfo->mStaticSampler)
+            if ((int)descInfo->mUpdateFrequency != updateFreq || descInfo->mRootDescriptor || descInfo->mStaticSampler)
             {
                 continue;
             }
@@ -6236,7 +6297,8 @@ void vk_updateDescriptorSet(Renderer* pRenderer, uint32_t index, DescriptorSet* 
         }
         else
         {
-            VALIDATE_DESCRIPTOR(pDesc, "Invalid descriptor with param name (%s)", pParam->pName ? pParam->pName : "<NULL>");
+            VALIDATE_DESCRIPTOR(pDesc, "Descriptor with param name (%s) not found in root signature, make sure it is not optimized away",
+                                pParam->pName ? pParam->pName : "<NULL>");
         }
 
         const DescriptorType type = (DescriptorType)pDesc->mType; //-V522
@@ -6992,9 +7054,9 @@ void vk_addRootSignature(Renderer* pRenderer, const RootSignatureDesc* pRootSign
             if (!pNode)
             {
                 ShaderResource* pResource = NULL;
-                for (ptrdiff_t i = 0; i < arrlen(shaderResources); ++i)
+                for (ptrdiff_t j = 0; j < arrlen(shaderResources); ++j)
                 {
-                    ShaderResource* pCurrent = &shaderResources[i];
+                    ShaderResource* pCurrent = &shaderResources[j];
                     if (pCurrent->type == pRes->type && (pCurrent->used_stages == pRes->used_stages) &&
                         (((pCurrent->reg ^ pRes->reg) | (pCurrent->set ^ pRes->set)) == 0))
                     {
@@ -7049,11 +7111,11 @@ void vk_addRootSignature(Renderer* pRenderer, const RootSignatureDesc* pRootSign
                     return;
                 }
 
-                for (ptrdiff_t i = 0; i < arrlen(shaderResources); ++i)
+                for (ptrdiff_t j = 0; j < arrlen(shaderResources); ++j)
                 {
-                    if (strcmp(shaderResources[i].name, pNode->key) == 0)
+                    if (strcmp(shaderResources[j].name, pNode->key) == 0)
                     {
-                        shaderResources[i].used_stages |= pRes->used_stages;
+                        shaderResources[j].used_stages |= pRes->used_stages;
                         break;
                     }
                 }
@@ -7162,12 +7224,12 @@ void vk_addRootSignature(Renderer* pRenderer, const RootSignatureDesc* pRootSign
 
             // Update descriptor pool size for this descriptor type
             VkDescriptorPoolSize* poolSize = NULL;
-            for (uint32_t i = 0; i < MAX_DESCRIPTOR_POOL_SIZE_ARRAY_COUNT; ++i)
+            for (uint32_t j = 0; j < MAX_DESCRIPTOR_POOL_SIZE_ARRAY_COUNT; ++j)
             {
-                if (binding.descriptorType == pRootSignature->mVk.mPoolSizes[setIndex][i].type &&
-                    pRootSignature->mVk.mPoolSizes[setIndex][i].descriptorCount)
+                if (binding.descriptorType == pRootSignature->mVk.mPoolSizes[setIndex][j].type &&
+                    pRootSignature->mVk.mPoolSizes[setIndex][j].descriptorCount)
                 {
-                    poolSize = &pRootSignature->mVk.mPoolSizes[setIndex][i];
+                    poolSize = &pRootSignature->mVk.mPoolSizes[setIndex][j];
                     break;
                 }
             }
@@ -7266,7 +7328,7 @@ void vk_addRootSignature(Renderer* pRenderer, const RootSignatureDesc* pRootSign
             // vkCmdBindDescriptorSets - pDynamicOffsets - entries are ordered by the binding numbers in the descriptor set layouts
             stableSortPDescriptorInfo(layout.mDynamicDescriptors, arrlenu(layout.mDynamicDescriptors));
 
-            pRootSignature->mVk.mDynamicDescriptorCounts[layoutIndex] = (uint32_t)arrlen(layout.mDynamicDescriptors);
+            pRootSignature->mVk.mDynamicDescriptorCounts[layoutIndex] = (uint8_t)arrlen(layout.mDynamicDescriptors);
             for (uint32_t descIndex = 0; descIndex < (uint32_t)arrlen(layout.mDynamicDescriptors); ++descIndex)
             {
                 DescriptorInfo* pDesc = layout.mDynamicDescriptors[descIndex];
@@ -8927,7 +8989,7 @@ void vk_acquireNextImage(Renderer* pRenderer, SwapChain* pSwapChain, Semaphore* 
         // If swapchain is out of date, let caller know by setting image index to -1
         if (vk_res == VK_ERROR_OUT_OF_DATE_KHR)
         {
-            *pImageIndex = -1;
+            *pImageIndex = (uint32_t)-1;
             vkResetFences(pRenderer->mVk.pDevice, 1, &pFence->mVk.pFence);
             return;
         }
@@ -8945,7 +9007,7 @@ void vk_acquireNextImage(Renderer* pRenderer, SwapChain* pSwapChain, Semaphore* 
         // If swapchain is out of date, let caller know by setting image index to -1
         if (vk_res == VK_ERROR_OUT_OF_DATE_KHR)
         {
-            *pImageIndex = -1;
+            *pImageIndex = (uint32_t)-1;
             pSignalSemaphore->mVk.mSignaled = false;
             return;
         }
@@ -9557,7 +9619,13 @@ void vk_cmdEndQuery(Cmd* pCmd, QueryPool* pQueryPool, QueryDesc* pQuery)
     }
 }
 
-void vk_cmdResolveQuery(Cmd* pCmd, QueryPool* pQueryPool, uint32_t startQuery, uint32_t queryCount) {}
+void vk_cmdResolveQuery(Cmd* pCmd, QueryPool* pQueryPool, uint32_t startQuery, uint32_t queryCount)
+{
+    UNREF_PARAM(pCmd);
+    UNREF_PARAM(pQueryPool);
+    UNREF_PARAM(startQuery);
+    UNREF_PARAM(queryCount);
+}
 
 void vk_cmdResetQuery(Cmd* pCmd, QueryPool* pQueryPool, uint32_t startQuery, uint32_t queryCount)
 {
@@ -9733,6 +9801,11 @@ void vk_cmdWriteMarker(Cmd* pCmd, const MarkerDesc* pDesc)
 /************************************************************************/
 static void SetVkObjectName(Renderer* pRenderer, uint64_t handle, VkObjectType type, VkDebugReportObjectTypeEXT typeExt, const char* pName)
 {
+    UNREF_PARAM(pRenderer);
+    UNREF_PARAM(handle);
+    UNREF_PARAM(type);
+    UNREF_PARAM(typeExt);
+    UNREF_PARAM(pName);
 #if defined(ENABLE_GRAPHICS_DEBUG)
     // #NOTE: Some drivers dont like empty names - VK_ERROR_OUT_OF_HOST_MEMORY
     if (!pName || !strcmp(pName, ""))

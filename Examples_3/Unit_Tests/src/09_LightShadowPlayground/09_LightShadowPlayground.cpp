@@ -55,11 +55,6 @@
 #include "../../../../Common_3/Utilities/RingBuffer.h"
 #include "../../../../Common_3/Utilities/Threading/ThreadSystem.h"
 
-#if defined(XBOX)
-#include "../../../../Xbox/Common_3/Graphics/Direct3D12/Direct3D12X.h"
-#include "../../../../Xbox/Common_3/Graphics/IESRAMManager.h"
-#endif
-
 // Math
 #include "../../../../Common_3/Utilities/Math/MathTypes.h"
 #include "../../../../Common_3/Utilities/Math/ShaderUtilities.h"
@@ -544,30 +539,30 @@ uint32_t gASMMaxTilesPerPass = 4;
 
 typedef struct LightUniformBlock
 {
-    mat4 mLightViewProj;
-    vec4 mLightPosition;
-    vec4 mLightColor = { 1, 0, 0, 1 };
-    vec4 mLightUpVec;
-    vec4 mTanLightAngleAndThresholdValue;
-    vec3 mLightDir;
+    CameraMatrix mLightViewProj;
+    vec4         mLightPosition;
+    vec4         mLightColor = { 1, 0, 0, 1 };
+    vec4         mLightUpVec;
+    vec4         mTanLightAngleAndThresholdValue;
+    vec3         mLightDir;
 } LightUniformBlock;
 
 typedef struct CameraUniform
 {
-    mat4  mView;
-    mat4  mProject;
-    mat4  mViewProject;
-    mat4  mInvView;
-    mat4  mInvProj;
-    mat4  mInvViewProject;
-    vec4  mCameraPos;
-    float mNear;
-    float mFar;
-    float mFarNearDiff;
-    float mFarNear;
-    vec2  mTwoOverRes;
-    vec2  mWindowSize;
-    vec4  mDeviceZToWorldZ;
+    mat4         mView;
+    CameraMatrix mProject;
+    CameraMatrix mViewProject;
+    mat4         mInvView;
+    CameraMatrix mInvProj;
+    CameraMatrix mInvViewProject;
+    vec4         mCameraPos;
+    float        mNear;
+    float        mFar;
+    float        mFarNearDiff;
+    float        mFarNear;
+    vec2         mTwoOverRes;
+    vec2         mWindowSize;
+    vec4         mDeviceZToWorldZ;
 } CameraUniform;
 
 typedef struct ESMInputConstants
@@ -784,13 +779,6 @@ Shader*        pShaderTriangleFiltering = NULL;
 Pipeline*      pPipelineTriangleFiltering = NULL;
 RootSignature* pRootSignatureTriangleFiltering = NULL;
 DescriptorSet* pDescriptorSetTriangleFiltering[2] = { NULL };
-/************************************************************************/
-// Batch compaction pipeline
-/************************************************************************/
-Shader*        pShaderBatchCompaction = NULL;
-Pipeline*      pPipelineBatchCompaction = NULL;
-RootSignature* pRootSignatureBatchCompaction = NULL;
-DescriptorSet* pDescriptorSetBatchCompaction = NULL;
 
 /************************************************************************/
 // Gaussian Blur pipelines
@@ -1092,6 +1080,7 @@ uint32_t     gSSSRootConstantIndex = 0;
 
 Renderer*         pRenderer = NULL;
 VisibilityBuffer* pVisibilityBuffer = NULL;
+Scene*            pScene = NULL;
 
 Queue*     pGraphicsQueue = NULL;
 GpuCmdRing gGraphicsCmdRing = {};
@@ -1535,6 +1524,7 @@ void CalculateBounds(BVHTree* bvhTree, int32_t begin, int32_t end, vec3& outMinB
 
 BVHNode* CreateBVHNodeSHA(BVHTree* bvhTree, int32_t begin, int32_t end, float parentSplitCost)
 {
+    UNREF_PARAM(parentSplitCost);
     int32_t count = end - begin + 1;
 
     vec3 minBounds;
@@ -1729,6 +1719,7 @@ struct SDFVolumeData
         mSDFVolumeSize(0), mLocalBoundingBox(), mDistMinMax(FLT_MAX, FLT_MIN), mIsTwoSided(false), mTwoSidedWorldSpaceBias(0.f),
         mSDFVolumeTextureNode(this)
     {
+        UNREF_PARAM(mainMesh);
     }
 
     SDFVolumeData():
@@ -1849,6 +1840,7 @@ struct CalculateMeshSDFTask
 
 void DoCalculateMeshSDFTask(void* dataPtr, uintptr_t index)
 {
+    UNREF_PARAM(index);
     CalculateMeshSDFTask* task = (CalculateMeshSDFTask*)(dataPtr);
 
     const AABB&  sdfVolumeBounds = *task->mSDFVolumeBounds;
@@ -2245,12 +2237,12 @@ float Get3DRefinementDistanceSq(const AABB& BBox, const vec2& refinementPos)
 
 struct ASMProjectionData
 {
-    mat4 mViewMat;
-    mat4 mInvViewMat;
-    mat4 mProjMat;
-    mat4 mInvProjMat;
-    mat4 mViewProjMat;
-    mat4 mInvViewProjMat;
+    mat4         mViewMat;
+    mat4         mInvViewMat;
+    CameraMatrix mProjMat;
+    CameraMatrix mInvProjMat;
+    CameraMatrix mViewProjMat;
+    CameraMatrix mInvViewProjMat;
 };
 
 class ConvexHull2D
@@ -2275,7 +2267,7 @@ public:
         vec2 vertices[numVertices];
         vertices[0] = vec2(projectedFrustumPos.getX(), projectedFrustumPos.getY());
 
-        mat4 projMat = projection.mProjMat;
+        mat4 projMat = projection.mProjMat.mCamera;
 
         float hz = Project(vec3(0, 0, frustumZMaxOverride), 1.f, projMat).getZ();
 
@@ -2286,7 +2278,7 @@ public:
             vec3(-1.0f, +1.0f, hz),
         };
 
-        mat4 tm = viewProj * projection.mInvViewProjMat;
+        mat4 tm = viewProj * projection.mInvViewProjMat.mCamera;
         for (uint32_t i = 1; i < numVertices; ++i)
         {
             vec3 indxProjectedFrustumPos = Project(frustumCorners[i - 1], 1.f, tm);
@@ -2495,6 +2487,7 @@ public:
 
     void Add(CItem* pItem, bool mayBeAlreadyInserted = false)
     {
+        UNREF_PARAM(mayBeAlreadyInserted);
         SHandleSetter& handle = static_cast<SHandleSetter&>((pItem->*GetHandle)());
         if (!handle.IsInserted())
         {
@@ -2504,6 +2497,7 @@ public:
     }
     void Remove(CItem* pItem, bool mayBeNotInserted = false)
     {
+        UNREF_PARAM(mayBeNotInserted);
         SHandleSetter& handle = static_cast<SHandleSetter&>((pItem->*GetHandle)());
         if (handle.IsInserted())
         {
@@ -2826,7 +2820,7 @@ public:
                 break;
             }
 
-#if defined(XBOX)
+#if defined(GFX_RESOURCE_INIT_NON_ZERO)
             // On Xbox the texture is initialized with garbage value, so texture that isn't cleared every frame
             // needs to be cleared at the begininng for xbox.
             if (mDEMFirstTimeRender)
@@ -2946,6 +2940,7 @@ public:
     void RenderIndirectModelSceneTile(const vec2& viewPortLoc, const vec2& viewPortSize, const ASMProjectionData& renderProjectionData,
                                       bool isLayer, ASMSShadowMapRenderContext& renderContext, uint32_t tileIndex, uint32_t geomSet)
     {
+        UNREF_PARAM(isLayer);
         Cmd* pCurCmd = renderContext.m_pRendererContext->m_pCmd;
 
         cmdSetViewport(pCurCmd, static_cast<float>(viewPortLoc.getX()), static_cast<float>(viewPortLoc.getY()),
@@ -2957,7 +2952,7 @@ public:
         for (int32_t i = 0; i < MESH_COUNT; ++i)
         {
             gMeshASMProjectionInfoUniformData[0][gFrameIndex].mWorldViewProjMat =
-                renderProjectionData.mViewProjMat * gMeshInfoData[i].mWorldMat;
+                renderProjectionData.mViewProjMat.mCamera * gMeshInfoData[i].mWorldMat;
             gMeshASMProjectionInfoUniformData[0][gFrameIndex].mViewID = VIEW_SHADOW + tileIndex;
         }
 
@@ -2973,17 +2968,14 @@ public:
         cmdBindIndexBuffer(pCurCmd, pVisibilityBuffer->ppFilteredIndexBuffer[VIEW_SHADOW + tileIndex], INDEX_TYPE_UINT32, 0);
 
         cmdBindPipeline(pCurCmd, pPipelines[geomSet]);
-        cmdBindVertexBuffer(pCurCmd, geomSet == GEOMSET_OPAQUE ? 1 : 2, &pGeom->pVertexBuffers[0], pGeom->mVertexStrides, NULL);
 
         cmdBindDescriptorSet(pCurCmd, 0, pDescriptorSetVBPass[0]);
         cmdBindDescriptorSet(pCurCmd, gFrameIndex, pDescriptorSetVBPass[1]);
         cmdBindDescriptorSet(pCurCmd, gFrameIndex + tileIndex * gDataBufferCount, pDescriptorSetASMDepthPass);
 
         uint64_t indirectBufferByteOffset = GET_INDIRECT_DRAW_ELEM_INDEX(VIEW_SHADOW + tileIndex, geomSet, 0) * sizeof(uint32_t);
-        uint64_t indirectBufferCounterByteOffset = indirectBufferByteOffset + DRAW_COUNTER_SLOT_OFFSET_IN_BYTES;
-        cmdExecuteIndirect(pCurCmd, pCmdSignatureVBPass, gPerFrameData[gFrameIndex].gDrawCount[geomSet],
-                           pVisibilityBuffer->ppFilteredIndirectDrawArgumentsBuffers[0], indirectBufferByteOffset,
-                           pVisibilityBuffer->ppFilteredIndirectDrawArgumentsBuffers[0], indirectBufferCounterByteOffset);
+        Buffer*  pIndirectDrawBuffer = pVisibilityBuffer->ppIndirectDrawArgBuffer[0];
+        cmdExecuteIndirect(pCurCmd, pCmdSignatureVBPass, 1, pIndirectDrawBuffer, indirectBufferByteOffset, NULL, 0);
     }
 
     bool NothingToRender() const { return m_renderBatch.empty(); }
@@ -3250,7 +3242,7 @@ public:
 
     ASMFrustum(const Config& cfg, bool useMRF, bool isPreRender):
         mIsPrerender(isPreRender), m_cfg(cfg), m_lodClampTexture(NULL), m_layerIndirectionTexture(NULL)
-#if defined(XBOX)
+#if defined(GFX_RESOURCE_INIT_NON_ZERO)
         ,
         mFirstTimeRender(true)
 #endif
@@ -3446,6 +3438,7 @@ public:
     const ASMProjectionData CalcCamera(const vec3& cameraPos, const AABB& BBoxLS, const vec2& viewportScaleFactor, bool reverseZ = true,
                                        bool customCamera = false) const
     {
+        UNREF_PARAM(customCamera);
         mat4              viewMat = mat4::lookAtRH(Point3(cameraPos), Point3(cameraPos + m_lightDir), vec3(0.f, 1.f, 0.f));
         ASMProjectionData renderProjection;
         renderProjection.mViewMat = viewMat;
@@ -3459,15 +3452,15 @@ public:
 
         if (reverseZ)
         {
-            renderProjection.mProjMat = mat4::orthographicLH(-hw, hw, -hh, hh, farPlane, 0);
+            renderProjection.mProjMat = CameraMatrix::orthographic(-hw, hw, -hh, hh, farPlane, 0);
         }
         else
         {
-            renderProjection.mProjMat = mat4::orthographicLH(-hw, hw, -hh, hh, 0, farPlane);
+            renderProjection.mProjMat = CameraMatrix::orthographic(-hw, hw, -hh, hh, 0, farPlane);
         }
 
         renderProjection.mInvViewMat = inverse(viewMat);
-        renderProjection.mInvProjMat = inverse(renderProjection.mProjMat);
+        renderProjection.mInvProjMat = CameraMatrix::inverse(renderProjection.mProjMat);
         renderProjection.mViewProjMat = renderProjection.mProjMat * viewMat;
         renderProjection.mInvViewProjMat = renderProjection.mInvViewMat * renderProjection.mInvProjMat;
 
@@ -3802,7 +3795,7 @@ private:
             m_indexViewMat = renderProjection.mViewMat;
 
             static const mat4 screenToTexCoordMatrix = mat4::translation(vec3(0.5f, 0.5f, 0.f)) * mat4::scale(vec3(0.5f, -0.5f, 1.f));
-            m_indexTexMat = screenToTexCoordMatrix * renderProjection.mViewProjMat;
+            m_indexTexMat = screenToTexCoordMatrix * renderProjection.mViewProjMat.mCamera;
         }
     }
     void FillIndirectionTextureData(bool processLayers)
@@ -3937,6 +3930,8 @@ private:
     void UpdateIndirectionTexture(RenderTarget* indirectionTexture, ASMSShadowMapRenderContext context, bool disableHierarchy,
                                   bool isPreRender)
     {
+        UNREF_PARAM(indirectionTexture);
+        UNREF_PARAM(isPreRender);
         ASMRendererContext* curRendererContext = context.m_pRendererContext;
 
         IndirectionRenderData* finalIndirectionRenderData =
@@ -3960,7 +3955,7 @@ private:
 
         BindRenderTargetsDesc bindRenderTargets = {};
         bindRenderTargets.mRenderTargetCount = 1;
-#if defined(XBOX)
+#if defined(GFX_RESOURCE_INIT_NON_ZERO)
         if (mFirstTimeRender)
         {
             bindRenderTargets.mRenderTargets[0].mLoadAction = LOAD_ACTION_CLEAR;
@@ -4034,7 +4029,7 @@ private:
     }
 
 private:
-#if defined(XBOX)
+#if defined(GFX_RESOURCE_INIT_NON_ZERO)
     bool mFirstTimeRender;
 #endif
 };
@@ -4042,6 +4037,7 @@ private:
 void ASMTileCache::RenderTiles(uint32_t numTiles, ASMTileCacheEntry** tiles, RenderTarget* workBufferDepth, RenderTarget* workBufferColor,
                                ASMSShadowMapRenderContext& context, bool allowDEM)
 {
+    UNREF_PARAM(workBufferColor);
     if (!numTiles)
         return;
 
@@ -4148,7 +4144,7 @@ void ASMTileCache::RenderTiles(uint32_t numTiles, ASMTileCacheEntry** tiles, Ren
             BindRenderTargetsDesc copyDepthQuadBindDesc = {};
             copyDepthQuadBindDesc.mRenderTargetCount = 1;
             copyDepthQuadBindDesc.mRenderTargets[0] = { pRenderTargetASMDepthAtlas, LOAD_ACTION_LOAD };
-#if defined(XBOX)
+#if defined(GFX_RESOURCE_INIT_NON_ZERO)
             if (mDepthFirstTimeRender)
             {
                 copyDepthQuadBindDesc.mRenderTargets[0].mLoadAction = LOAD_ACTION_CLEAR;
@@ -4299,14 +4295,14 @@ public:
         return m_cache->PrepareRenderTilesBatch(context);
     }
 
-    void Render(RenderTarget* pRenderTargetDepth, RenderTarget* pRenderTargetColor, ASMRendererContext& renderContext,
+    void Render(RenderTarget* pDepthTarget, RenderTarget* pRenderTargetColor, ASMRendererContext& renderContext,
                 ASMProjectionData* projectionRender)
     {
         ASMSShadowMapRenderContext context = { &renderContext, projectionRender };
 
         if (!m_cache->NothingToRender())
         {
-            m_cache->RenderTilesBatch(pRenderTargetDepth, pRenderTargetColor, context);
+            m_cache->RenderTilesBatch(pDepthTarget, pRenderTargetColor, context);
         }
 
         m_cache->CreateDEM(pRenderTargetColor, context, false);
@@ -4332,6 +4328,8 @@ public:
               const vec3& halfwayLightDir, uint32_t currentTime, uint32_t dt, bool disableWarping, bool forceUpdate,
               uint32_t updateDeltaTime)
     {
+        UNREF_PARAM(currentTime);
+        UNREF_PARAM(updateDeltaTime);
         // mTickData = tickData;
 
         vec3 sunDir = lightDir;
@@ -4590,6 +4588,7 @@ ASM* pASM;
 
 void SetupASMDebugTextures(void* pUserData)
 {
+    UNREF_PARAM(pUserData);
     if (!gASMCpuSettings.mShowDebugTextures)
     {
         if (pUIASMDebugTexturesWindow)
@@ -4672,6 +4671,7 @@ const char* gTestScripts[] = { "Test_ESM.lua", "Test_ASM.lua",    "Test_SDF.lua"
 uint32_t    gCurrentScriptIndex = 0;
 void        RunScript(void* pUserData)
 {
+    UNREF_PARAM(pUserData);
     LuaScriptDesc runDesc = {};
     runDesc.pScriptFileName = gTestScripts[gCurrentScriptIndex];
     luaQueueScriptToRun(&runDesc);
@@ -4695,10 +4695,15 @@ public:
         uint32_t startIdx = 0;
     } sdfLoadData[NUM_SDF_MESHES];
 
-    static void refreshASM(void* pUserData) { pASM->Reset(); }
+    static void refreshASM(void* pUserData)
+    {
+        UNREF_PARAM(pUserData);
+        pASM->Reset();
+    }
 
     static void resetLightDir(void* pUserData)
     {
+        UNREF_PARAM(pUserData);
         asmCurrentTime = 0.f;
         refreshASM(pUserData);
     }
@@ -5277,7 +5282,7 @@ public:
         SyncToken        sceneToken = {};
         GeometryLoadDesc sceneLoadDesc = {};
         sceneLoadDesc.mFlags = GEOMETRY_LOAD_FLAG_SHADOWED; // To compute CPU clusters
-        Scene* pScene = loadSanMiguel(&sceneLoadDesc, sceneToken, false);
+        pScene = initSanMiguel(&sceneLoadDesc, sceneToken, false);
         waitForToken(&sceneToken);
 
         threadSystemWaitIdle(gThreadSystem);
@@ -5314,21 +5319,9 @@ public:
             descSpec.ppTexture = &gSpecularMapsStorage[i];
             addResource(&descSpec, NULL);
         }
-        // Cluster creation
-        /************************************************************************/
 
-        VisibilityBufferDesc vbDesc = {};
-        vbDesc.mNumFrames = gDataBufferCount;
-        vbDesc.mNumBuffers = 1; // We don't use Async Compute for triangle filtering, 1 buffer is enough
-        vbDesc.mNumGeometrySets = NUM_GEOMETRY_SETS;
-        vbDesc.mNumViews = NUM_CULLING_VIEWPORTS;
-        vbDesc.mMaxDrawsIndirect = MAX_DRAWS_INDIRECT;
-        vbDesc.mIndirectElementCount = INDIRECT_DRAW_ARGUMENTS_STRUCT_NUM_ELEMENTS;
-        vbDesc.mDrawArgCount = gMeshCount;
-        vbDesc.mIndexCount = pGeom->mIndexCount;
-        vbDesc.mComputeThreads = VB_COMPUTE_THEADS;
-        vbDesc.mMaxPrimitivesPerDrawIndirect = MAX_PRIMITIVES_PER_DRAW_INDIRECT;
-        initVisibilityBuffer(pRenderer, &vbDesc, &pVisibilityBuffer);
+        /************************************************************************/
+        uint32_t visibilityBufferFilteredIndexCount[NUM_GEOMETRY_SETS] = {};
 
         MeshConstants* meshConstants = (MeshConstants*)tf_malloc(gMeshCount * sizeof(MeshConstants));
         // Calculate mesh constants and filter containers
@@ -5336,7 +5329,7 @@ public:
         {
             MaterialFlags materialFlag = pScene->materialFlags[i];
             uint32_t      geomSet = materialFlag & MATERIAL_FLAG_ALPHA_TESTED ? GEOMSET_ALPHA_CUTOUT : GEOMSET_OPAQUE;
-
+            visibilityBufferFilteredIndexCount[geomSet] += (pScene->geom->pDrawArgs + i)->mIndexCount;
             pVBMeshInstances[i].mGeometrySet = geomSet;
             pVBMeshInstances[i].mMeshIndex = i;
             pVBMeshInstances[i].mTriangleCount = (pScene->geom->pDrawArgs + i)->mIndexCount / 3;
@@ -5350,6 +5343,15 @@ public:
 
         removeResource(pScene->geomData);
         pScene->geomData = NULL;
+
+        VisibilityBufferDesc vbDesc = {};
+        vbDesc.mNumFrames = gDataBufferCount;
+        vbDesc.mNumBuffers = 1; // We don't use Async Compute for triangle filtering, 1 buffer is enough
+        vbDesc.mNumGeometrySets = NUM_GEOMETRY_SETS;
+        vbDesc.pMaxIndexCountPerGeomSet = visibilityBufferFilteredIndexCount;
+        vbDesc.mNumViews = NUM_CULLING_VIEWPORTS;
+        vbDesc.mComputeThreads = VB_COMPUTE_THREADS;
+        initVisibilityBuffer(pRenderer, &vbDesc, &pVisibilityBuffer);
 
         BufferLoadDesc meshConstantDesc = {};
         meshConstantDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_BUFFER;
@@ -5514,8 +5516,6 @@ public:
 
         GuiController::addGui();
 
-        unloadSanMiguel(pScene);
-
         CameraMotionParameters cmp{ 146.0f, 300.0f, 140.0f };
         vec3                   camPos = vec3(120.f + SAN_MIGUEL_OFFSETX, 98.f, 14.f);
         vec3                   lookAt = camPos + vec3(-1.0f - 0.0f, 0.1f, 0.0f);
@@ -5549,12 +5549,14 @@ public:
         addInputAction(&actionDesc);
         actionDesc = { DefaultInputActions::EXIT, [](InputActionContext* ctx)
                        {
+                           UNREF_PARAM(ctx);
                            requestShutdown();
                            return true;
                        } };
         addInputAction(&actionDesc);
         InputActionCallback onUIInput = [](InputActionContext* ctx)
         {
+            UNREF_PARAM(ctx);
             if (ctx->mActionId > UISystemInputActions::UI_ACTION_START_ID_)
             {
                 uiOnInput(ctx->mActionId, ctx->mBool, ctx->pPosition, &ctx->mFloat2);
@@ -5604,6 +5606,7 @@ public:
         addInputAction(&actionDesc);
         actionDesc = { DefaultInputActions::RESET_CAMERA, [](InputActionContext* ctx)
                        {
+                           UNREF_PARAM(ctx);
                            if (!uiWantTextInput())
                                pCameraController->resetView();
                            return true;
@@ -5782,6 +5785,7 @@ public:
         tf_free(gDiffuseMapsStorage);
         tf_free(gNormalMapsStorage);
         tf_free(gSpecularMapsStorage);
+        exitSanMiguel(pScene);
 
         exitUserInterface();
 
@@ -5974,9 +5978,8 @@ public:
                 uiDestroyComponent(pUIASMDebugTexturesWindow);
                 pUIASMDebugTexturesWindow = NULL;
             }
-#if defined(XBOX)
-            esramResetAllocations(pRenderer->mDx.pESRAMManager);
-#endif
+
+            ESRAM_RESET_ALLOCS(pRenderer);
         }
 
         if (pReloadDesc->mType & RELOAD_TYPE_SHADER)
@@ -6238,22 +6241,16 @@ public:
         Pipeline* pPipelines[] = { pPipelineDepthPass, pPipelineAlphaDepthPass };
         COMPILE_ASSERT(TF_ARRAY_COUNT(pPipelines) == NUM_GEOMETRY_SETS);
 
-        Buffer* pVertexBuffersPosTex[] = { pGeom->pVertexBuffers[0], pGeom->pVertexBuffers[1] };
-
         for (uint32_t i = 0; i < NUM_GEOMETRY_SETS; ++i)
         {
             cmdBindPipeline(cmd, pPipelines[i]);
-            cmdBindVertexBuffer(cmd, i == GEOMSET_OPAQUE ? 1 : 2, pVertexBuffersPosTex, pGeom->mVertexStrides, NULL);
-
             cmdBindDescriptorSet(cmd, 0, pDescriptorSetVBPass[0]);
             cmdBindDescriptorSet(cmd, gFrameIndex, pDescriptorSetVBPass[1]);
             cmdBindDescriptorSet(cmd, gFrameIndex * 2 + 1, pDescriptorSetVBPass[2]);
 
             uint64_t indirectBufferByteOffset = GET_INDIRECT_DRAW_ELEM_INDEX(VIEW_SHADOW, i, 0) * sizeof(uint32_t);
-            uint64_t indirectBufferCounterByteOffset = indirectBufferByteOffset + DRAW_COUNTER_SLOT_OFFSET_IN_BYTES;
-            cmdExecuteIndirect(cmd, pCmdSignatureVBPass, gPerFrameData[gFrameIndex].gDrawCount[i],
-                               pVisibilityBuffer->ppFilteredIndirectDrawArgumentsBuffers[0], indirectBufferByteOffset,
-                               pVisibilityBuffer->ppFilteredIndirectDrawArgumentsBuffers[0], indirectBufferCounterByteOffset);
+            Buffer*  pIndirectDrawBuffer = pVisibilityBuffer->ppIndirectDrawArgBuffer[0];
+            cmdExecuteIndirect(cmd, pCmdSignatureVBPass, 1, pIndirectDrawBuffer, indirectBufferByteOffset, NULL, 0);
         }
 
         cmdBindRenderTargets(cmd, NULL);
@@ -6336,7 +6333,7 @@ public:
         int            dispatchCount = 0;
 
         vec3 lightDir = normalize(-gLightUniformData.mLightDir);
-        mat4 viewProject = gCameraUniformData.mViewProject;
+        mat4 viewProject = gCameraUniformData.mViewProject.mCamera;
 
         vec4      lightProjection = viewProject * vec4(lightDir, 0.0f);
         const int waveSize = 64;
@@ -6655,21 +6652,17 @@ public:
 
         for (uint32_t i = 0; i < NUM_GEOMETRY_SETS; ++i)
         {
-            Buffer* pVertexBuffersPosTex[] = { pGeom->pVertexBuffers[0], pGeom->pVertexBuffers[1] };
-
             cmdBeginGpuTimestampQuery(cmd, gCurrentGpuProfileToken, profileNames[i]);
             cmdBindPipeline(cmd, pPipelineVBBufferPass[i]);
 
             cmdBindDescriptorSet(cmd, 0, pDescriptorSetVBPass[0]);
             cmdBindDescriptorSet(cmd, gFrameIndex, pDescriptorSetVBPass[1]);
             cmdBindDescriptorSet(cmd, gFrameIndex * 2 + 0, pDescriptorSetVBPass[2]);
-            cmdBindVertexBuffer(cmd, i == GEOMSET_OPAQUE ? 1 : 2, pVertexBuffersPosTex, pGeom->mVertexStrides, NULL);
 
             uint64_t indirectBufferByteOffset = GET_INDIRECT_DRAW_ELEM_INDEX(VIEW_CAMERA, i, 0) * sizeof(uint32_t);
-            uint64_t indirectBufferCounterByteOffset = indirectBufferByteOffset + DRAW_COUNTER_SLOT_OFFSET_IN_BYTES;
-            Buffer*  pIndirectDrawBuffer = pVisibilityBuffer->ppFilteredIndirectDrawArgumentsBuffers[0];
-            cmdExecuteIndirect(cmd, pCmdSignatureVBPass, gPerFrameData[gFrameIndex].gDrawCount[i], pIndirectDrawBuffer,
-                               indirectBufferByteOffset, pIndirectDrawBuffer, indirectBufferCounterByteOffset);
+            Buffer*  pIndirectDrawBuffer = pVisibilityBuffer->ppIndirectDrawArgBuffer[0];
+            cmdExecuteIndirect(cmd, pCmdSignatureVBPass, 1, pIndirectDrawBuffer, indirectBufferByteOffset, NULL, 0);
+
             cmdEndGpuTimestampQuery(cmd, gCurrentGpuProfileToken);
         }
         cmdEndGpuTimestampQuery(cmd, gCurrentGpuProfileToken);
@@ -6760,7 +6753,7 @@ public:
         mainViewProjection.mViewMat = gCameraUniformData.mView;
         mainViewProjection.mProjMat = gCameraUniformData.mProject;
         mainViewProjection.mInvViewMat = inverse(mainViewProjection.mViewMat);
-        mainViewProjection.mInvProjMat = inverse(mainViewProjection.mProjMat);
+        mainViewProjection.mInvProjMat = CameraMatrix::inverse(mainViewProjection.mProjMat);
         mainViewProjection.mViewProjMat = mainViewProjection.mProjMat * mainViewProjection.mViewMat;
         mainViewProjection.mInvViewProjMat = mainViewProjection.mInvViewMat * mainViewProjection.mInvProjMat;
 
@@ -6773,7 +6766,7 @@ public:
             for (size_t i = 0; i < size; i++)
             {
                 gPerFrameData[gFrameIndex].gEyeObjectSpace[VIEW_SHADOW + i] =
-                    (renderBatchProjection[i]->mInvViewProjMat * vec4(0.f, 0.f, 0.f, 1.f)).getXYZ();
+                    (renderBatchProjection[i]->mInvViewProjMat.mCamera * vec4(0.f, 0.f, 0.f, 1.f)).getXYZ();
 
                 gVBConstants[gFrameIndex].transform[VIEW_SHADOW + i].mvp =
                     renderBatchProjection[i]->mViewProjMat * gMeshInfoData[0].mWorldMat;
@@ -6793,7 +6786,7 @@ public:
         mainViewProjection.mViewMat = gCameraUniformData.mView;
         mainViewProjection.mProjMat = gCameraUniformData.mProject;
         mainViewProjection.mInvViewMat = inverse(mainViewProjection.mViewMat);
-        mainViewProjection.mInvProjMat = inverse(mainViewProjection.mProjMat);
+        mainViewProjection.mInvProjMat = CameraMatrix::inverse(mainViewProjection.mProjMat);
         mainViewProjection.mViewProjMat = mainViewProjection.mProjMat * mainViewProjection.mViewMat;
         mainViewProjection.mInvViewProjMat = mainViewProjection.mInvViewMat * mainViewProjection.mInvProjMat;
 
@@ -6838,14 +6831,14 @@ public:
         constexpr float horizontal_fov = PI / 2.0f;
         constexpr float nearValue = 0.1f;
         constexpr float farValue = 1000.f;
-        mat4            projMat = CameraMatrix::perspectiveReverseZ(horizontal_fov, aspectInverse, nearValue, farValue).getPrimaryMatrix();
+        CameraMatrix    projMat = CameraMatrix::perspectiveReverseZ(horizontal_fov, aspectInverse, nearValue, farValue);
 
         gCameraUniformData.mView = viewMat;
         gCameraUniformData.mProject = projMat;
         gCameraUniformData.mViewProject = projMat * viewMat;
-        gCameraUniformData.mInvProj = inverse(projMat);
+        gCameraUniformData.mInvProj = CameraMatrix::inverse(projMat);
         gCameraUniformData.mInvView = inverse(viewMat);
-        gCameraUniformData.mInvViewProject = inverse(gCameraUniformData.mViewProject);
+        gCameraUniformData.mInvViewProject = CameraMatrix::inverse(gCameraUniformData.mViewProject);
         gCameraUniformData.mNear = nearValue;
         gCameraUniformData.mFarNearDiff = farValue - nearValue; // if OpenGL convention was used this would be 2x the value
         gCameraUniformData.mFarNear = nearValue * farValue;
@@ -6853,8 +6846,8 @@ public:
 
         gCameraUniformData.mTwoOverRes = vec2(1.5f / width, 1.5f / height);
 
-        float depthMul = projMat[2][2];
-        float depthAdd = projMat[3][2];
+        float depthMul = projMat.mCamera[2][2];
+        float depthAdd = projMat.mCamera[3][2];
 
         if (depthAdd == 0.f)
         {
@@ -6862,7 +6855,7 @@ public:
             depthAdd = 0.00000001f;
         }
 
-        if (projMat[3][3] < 1.0f)
+        if (projMat.mCamera[3][3] < 1.0f)
         {
             float subtractValue = depthMul / depthAdd;
             subtractValue -= 0.00000001f;
@@ -6886,9 +6879,9 @@ public:
         mat4 rotation = mat4::rotationXY(gLightCpuSettings.mSunControl.x, gLightCpuSettings.mSunControl.y);
         mat4 translation = mat4::translation(-vec3(lightSourcePos));
 
-        vec3 newLightDir = vec4(inverse(rotation) * vec4(0, 0, 1, 0)).getXYZ();
-        mat4 lightProjMat = mat4::orthographicLH(-140, 140, -210, 90, -220, 100);
-        mat4 lightView = rotation * translation;
+        vec3         newLightDir = vec4(inverse(rotation) * vec4(0, 0, 1, 0)).getXYZ();
+        CameraMatrix lightProjMat = CameraMatrix::orthographic(-140, 140, -210, 90, -220, 100);
+        mat4         lightView = rotation * translation;
 
         gLightUniformData.mLightPosition = vec4(0.f);
         gLightUniformData.mLightViewProj = lightProjMat * lightView;
@@ -6907,7 +6900,7 @@ public:
             mat4 offsetTranslationMat = mat4::translation(f3Tov3(gMeshInfoData[i].mOffsetTranslation));
             gMeshInfoData[i].mWorldMat = gMeshInfoData[i].mTranslationMat * gMeshInfoData[i].mScaleMat * offsetTranslationMat;
 
-            gMeshInfoUniformData[i][gFrameIndex].mWorldViewProjMat = gCameraUniformData.mViewProject * gMeshInfoData[i].mWorldMat;
+            gMeshInfoUniformData[i][gFrameIndex].mWorldViewProjMat = gCameraUniformData.mViewProject.mCamera * gMeshInfoData[i].mWorldMat;
 
             if (gCurrentShadowType == SHADOW_TYPE_ASM)
             {
@@ -6917,7 +6910,7 @@ public:
                      gCurrentShadowType == SHADOW_TYPE_MSM)
             {
                 gMeshASMProjectionInfoUniformData[i][gFrameIndex].mWorldViewProjMat =
-                    gLightUniformData.mLightViewProj * gMeshInfoData[i].mWorldMat;
+                    gLightUniformData.mLightViewProj.mCamera * gMeshInfoData[i].mWorldMat;
                 gMeshASMProjectionInfoUniformData[i][gFrameIndex].mViewID = VIEW_SHADOW;
             }
         }
@@ -6933,7 +6926,7 @@ public:
 
     void Draw() override
     {
-        if (pSwapChain->mEnableVsync != mSettings.mVSyncEnabled)
+        if ((bool)pSwapChain->mEnableVsync != mSettings.mVSyncEnabled)
         {
             waitQueueIdle(pGraphicsQueue);
             ::toggleVSync(pRenderer, &pSwapChain);
@@ -6960,7 +6953,7 @@ public:
         else if (gCurrentShadowType == SHADOW_TYPE_ESM || gCurrentShadowType == SHADOW_TYPE_VSM || gCurrentShadowType == SHADOW_TYPE_MSM)
         {
             gPerFrameData[gFrameIndex].gEyeObjectSpace[VIEW_SHADOW] =
-                (inverse(gLightUniformData.mLightViewProj) * vec4(0.f, 0.f, 0.f, 1.f)).getXYZ();
+                (CameraMatrix::inverse(gLightUniformData.mLightViewProj).mCamera * vec4(0.f, 0.f, 0.f, 1.f)).getXYZ();
 
             gVBConstants[gFrameIndex].transform[VIEW_SHADOW].mvp = gLightUniformData.mLightViewProj * gMeshInfoData[0].mWorldMat;
             gVBConstants[gFrameIndex].cullingViewports[VIEW_SHADOW].sampleCount = 1;
@@ -7053,12 +7046,10 @@ public:
                 TriangleFilteringPassDesc triangleFilteringDesc = {};
                 triangleFilteringDesc.pPipelineClearBuffers = pPipelineClearBuffers;
                 triangleFilteringDesc.pPipelineTriangleFiltering = pPipelineTriangleFiltering;
-                triangleFilteringDesc.pPipelineBatchCompaction = pPipelineBatchCompaction;
 
                 triangleFilteringDesc.pDescriptorSetClearBuffers = pDescriptorSetClearBuffers;
                 triangleFilteringDesc.pDescriptorSetTriangleFiltering = pDescriptorSetTriangleFiltering[0];
                 triangleFilteringDesc.pDescriptorSetTriangleFilteringPerFrame = pDescriptorSetTriangleFiltering[1];
-                triangleFilteringDesc.pDescriptorSetBatchCompaction = pDescriptorSetBatchCompaction;
 
                 triangleFilteringDesc.mFrameIndex = gFrameIndex;
                 triangleFilteringDesc.mBuffersIndex = 0; // We don't use Async Compute for triangle filtering, we just have 1 buffer
@@ -7069,16 +7060,18 @@ public:
             {
                 const uint32_t numBarriers = NUM_CULLING_VIEWPORTS + 2;
                 BufferBarrier  barriers2[numBarriers] = {};
-                barriers2[0] = { pVisibilityBuffer->ppFilteredIndirectDrawArgumentsBuffers[0], RESOURCE_STATE_UNORDERED_ACCESS,
-                                 RESOURCE_STATE_INDIRECT_ARGUMENT | RESOURCE_STATE_SHADER_RESOURCE };
+                uint32_t       barrierCount2 = 0;
+                barriers2[barrierCount2++] = { pVisibilityBuffer->ppIndirectDrawArgBuffer[0], RESOURCE_STATE_UNORDERED_ACCESS,
+                                               RESOURCE_STATE_INDIRECT_ARGUMENT | RESOURCE_STATE_SHADER_RESOURCE };
+                barriers2[barrierCount2++] = { pVisibilityBuffer->ppIndirectDataBuffer[gFrameIndex], RESOURCE_STATE_UNORDERED_ACCESS,
+                                               RESOURCE_STATE_SHADER_RESOURCE };
                 for (uint32_t i = 0; i < NUM_CULLING_VIEWPORTS; ++i)
                 {
-                    barriers2[i + 1] = { pVisibilityBuffer->ppFilteredIndexBuffer[i], RESOURCE_STATE_UNORDERED_ACCESS,
-                                         RESOURCE_STATE_INDEX_BUFFER | RESOURCE_STATE_SHADER_RESOURCE };
+                    barriers2[barrierCount2++] = { pVisibilityBuffer->ppFilteredIndexBuffer[i], RESOURCE_STATE_UNORDERED_ACCESS,
+                                                   RESOURCE_STATE_INDEX_BUFFER | RESOURCE_STATE_SHADER_RESOURCE };
                 }
-                barriers2[numBarriers - 1] = { pVisibilityBuffer->ppIndirectDataIndexBuffer[0], RESOURCE_STATE_UNORDERED_ACCESS,
-                                               RESOURCE_STATE_SHADER_RESOURCE };
-                cmdResourceBarrier(cmd, numBarriers, barriers2, 0, NULL, 0, NULL);
+
+                cmdResourceBarrier(cmd, barrierCount2, barriers2, 0, NULL, 0, NULL);
             }
             RenderTargetBarrier barriers[19] = {};
             uint32_t            barrierCount = 0;
@@ -7257,15 +7250,19 @@ public:
                 const uint32_t      numBarriers = NUM_CULLING_VIEWPORTS + 2;
                 RenderTargetBarrier barrierPresent = { pRenderTarget, RESOURCE_STATE_RENDER_TARGET, RESOURCE_STATE_PRESENT };
                 BufferBarrier       barriers2[numBarriers] = {};
-                barriers2[0] = { pVisibilityBuffer->ppFilteredIndirectDrawArgumentsBuffers[0],
-                                 RESOURCE_STATE_INDIRECT_ARGUMENT | RESOURCE_STATE_SHADER_RESOURCE, RESOURCE_STATE_UNORDERED_ACCESS };
+                uint32_t            barrierCount2 = 0;
+                barriers2[barrierCount2++] = { pVisibilityBuffer->ppIndirectDrawArgBuffer[0],
+                                               RESOURCE_STATE_INDIRECT_ARGUMENT | RESOURCE_STATE_SHADER_RESOURCE,
+                                               RESOURCE_STATE_UNORDERED_ACCESS };
+                barriers2[barrierCount2++] = { pVisibilityBuffer->ppIndirectDataBuffer[gFrameIndex], RESOURCE_STATE_SHADER_RESOURCE,
+                                               RESOURCE_STATE_UNORDERED_ACCESS };
                 for (uint32_t i = 0; i < NUM_CULLING_VIEWPORTS; ++i)
                 {
-                    barriers2[i + 1] = { pVisibilityBuffer->ppFilteredIndexBuffer[i],
-                                         RESOURCE_STATE_INDEX_BUFFER | RESOURCE_STATE_SHADER_RESOURCE, RESOURCE_STATE_UNORDERED_ACCESS };
+                    barriers2[barrierCount2++] = { pVisibilityBuffer->ppFilteredIndexBuffer[i],
+                                                   RESOURCE_STATE_INDEX_BUFFER | RESOURCE_STATE_SHADER_RESOURCE,
+                                                   RESOURCE_STATE_UNORDERED_ACCESS };
                 }
-                barriers2[numBarriers - 1] = { pVisibilityBuffer->ppIndirectDataIndexBuffer[0], RESOURCE_STATE_SHADER_RESOURCE,
-                                               RESOURCE_STATE_UNORDERED_ACCESS };
+
                 cmdResourceBarrier(cmd, numBarriers, barriers2, 0, NULL, 1, &barrierPresent);
             }
             cmdEndGpuFrameProfile(cmd, gCurrentGpuProfileToken);
@@ -7288,7 +7285,7 @@ public:
             submitDesc.pSignalFence = elem.pFence;
             queueSubmit(pGraphicsQueue, &submitDesc);
             QueuePresentDesc presentDesc = {};
-            presentDesc.mIndex = swapchainImageIndex;
+            presentDesc.mIndex = (uint8_t)swapchainImageIndex;
             presentDesc.mWaitSemaphoreCount = 1;
             presentDesc.ppWaitSemaphores = &elem.pSemaphore;
             presentDesc.pSwapChain = pSwapChain;
@@ -7349,6 +7346,7 @@ public:
 
     void presentImage(Cmd* cmd, Texture* pSrc, uint32_t index, RenderTarget* pDstCol)
     {
+        UNREF_PARAM(pSrc);
         cmdBeginGpuTimestampQuery(cmd, gCurrentGpuProfileToken, "Present Image");
 
         BindRenderTargetsDesc bindRenderTargets = {};
@@ -7765,9 +7763,6 @@ public:
         addDescriptorSet(pRenderer, &setDesc, &pDescriptorSetTriangleFiltering[0]);
         setDesc = { pRootSignatureTriangleFiltering, DESCRIPTOR_UPDATE_FREQ_PER_FRAME, gDataBufferCount };
         addDescriptorSet(pRenderer, &setDesc, &pDescriptorSetTriangleFiltering[1]);
-        // Batch compaction
-        setDesc = { pRootSignatureBatchCompaction, DESCRIPTOR_UPDATE_FREQ_NONE, gDataBufferCount };
-        addDescriptorSet(pRenderer, &setDesc, &pDescriptorSetBatchCompaction);
 
         // Gaussian blur
         setDesc = { pRootSignatureBlurCompute, DESCRIPTOR_UPDATE_FREQ_NONE, 2 };
@@ -7864,7 +7859,6 @@ public:
         removeDescriptorSet(pRenderer, pDescriptorSetClearBuffers);
         removeDescriptorSet(pRenderer, pDescriptorSetTriangleFiltering[0]);
         removeDescriptorSet(pRenderer, pDescriptorSetTriangleFiltering[1]);
-        removeDescriptorSet(pRenderer, pDescriptorSetBatchCompaction);
         removeDescriptorSet(pRenderer, pDescriptorSetVBShade[0]);
         removeDescriptorSet(pRenderer, pDescriptorSetVBShade[1]);
         removeDescriptorSet(pRenderer, pDescriptorSetResolve);
@@ -7906,36 +7900,40 @@ public:
         // Clear Buffers
         {
             DescriptorData clearParams[2] = {};
-            clearParams[0].pName = "indirectDrawArgsBuffer";
-            clearParams[0].ppBuffers = &pVisibilityBuffer->ppFilteredIndirectDrawArgumentsBuffers[0];
-            clearParams[1].pName = "uncompactedDrawArgsRW";
-            clearParams[1].ppBuffers = &pVisibilityBuffer->ppUncompactedDrawArgumentsBuffer[0];
+            clearParams[0].pName = "indirectDrawArgs";
+            clearParams[0].ppBuffers = &pVisibilityBuffer->ppIndirectDrawArgBuffer[0];
+            clearParams[1].pName = "VBConstantBuffer";
+            clearParams[1].ppBuffers = &pVisibilityBuffer->pVBConstantBuffer;
             updateDescriptorSet(pRenderer, 0, pDescriptorSetClearBuffers, 2, clearParams);
         }
         // Triangle Filtering
         {
-            DescriptorData filterParams[3] = {};
+            DescriptorData filterParams[4] = {};
             filterParams[0].pName = "vertexPositionBuffer";
             filterParams[0].ppBuffers = &pGeom->pVertexBuffers[0];
             filterParams[1].pName = "indexDataBuffer";
             filterParams[1].ppBuffers = &pGeom->pIndexBuffer;
             filterParams[2].pName = "meshConstantsBuffer";
             filterParams[2].ppBuffers = &pBufferMeshConstants;
-            updateDescriptorSet(pRenderer, 0, pDescriptorSetTriangleFiltering[0], 3, filterParams);
+            filterParams[3].pName = "VBConstantBuffer";
+            filterParams[3].ppBuffers = &pVisibilityBuffer->pVBConstantBuffer;
+            updateDescriptorSet(pRenderer, 0, pDescriptorSetTriangleFiltering[0], 4, filterParams);
 
             for (uint32_t i = 0; i < gDataBufferCount; ++i)
             {
-                DescriptorData filterParams[4] = {};
-                filterParams[0].pName = "filteredIndicesBuffer";
-                filterParams[0].mCount = NUM_CULLING_VIEWPORTS;
-                filterParams[0].ppBuffers = &pVisibilityBuffer->ppFilteredIndexBuffer[0];
-                filterParams[1].pName = "uncompactedDrawArgsRW";
-                filterParams[1].ppBuffers = &pVisibilityBuffer->ppUncompactedDrawArgumentsBuffer[0];
-                filterParams[2].pName = "PerFrameVBConstants";
-                filterParams[2].ppBuffers = &pBufferVBConstants[i];
-                filterParams[3].pName = "filterDispatchGroupDataBuffer";
-                filterParams[3].ppBuffers = &pVisibilityBuffer->ppFilterDispatchGroupDataBuffer[i];
-                updateDescriptorSet(pRenderer, i, pDescriptorSetTriangleFiltering[1], 4, filterParams);
+                DescriptorData filterParamsIdx[5] = {};
+                filterParamsIdx[0].pName = "filteredIndicesBuffer";
+                filterParamsIdx[0].mCount = NUM_CULLING_VIEWPORTS;
+                filterParamsIdx[0].ppBuffers = &pVisibilityBuffer->ppFilteredIndexBuffer[0];
+                filterParamsIdx[1].pName = "indirectDataBuffer";
+                filterParamsIdx[1].ppBuffers = &pVisibilityBuffer->ppIndirectDataBuffer[i];
+                filterParamsIdx[2].pName = "PerFrameVBConstants";
+                filterParamsIdx[2].ppBuffers = &pBufferVBConstants[i];
+                filterParamsIdx[3].pName = "filterDispatchGroupDataBuffer";
+                filterParamsIdx[3].ppBuffers = &pVisibilityBuffer->ppFilterDispatchGroupDataBuffer[i];
+                filterParamsIdx[4].pName = "indirectDrawArgs";
+                filterParamsIdx[4].ppBuffers = &pVisibilityBuffer->ppIndirectDrawArgBuffer[0];
+                updateDescriptorSet(pRenderer, i, pDescriptorSetTriangleFiltering[1], 5, filterParamsIdx);
             }
         }
         // Gaussian Blur
@@ -7952,29 +7950,6 @@ public:
             textures[0] = pRenderTargetMSM[0]->pTexture;
             textures[1] = pRenderTargetMSM[1]->pTexture;
             updateDescriptorSet(pRenderer, 0, pDescriptorSetBlurMSMCompute, 2, BlurDescParams);
-        }
-        // Batch Compaction
-        {
-            uint32_t       paramsCount = 3;
-            DescriptorData compactParams[4] = {};
-            compactParams[0].pName = "indirectDrawArgsBuffer";
-            compactParams[0].mBindICB = true;
-            compactParams[0].pICBName = "icb";
-            compactParams[0].ppBuffers = &pVisibilityBuffer->ppFilteredIndirectDrawArgumentsBuffers[0];
-            compactParams[1].pName = "uncompactedDrawArgs";
-            compactParams[1].ppBuffers = &pVisibilityBuffer->ppUncompactedDrawArgumentsBuffer[0];
-            compactParams[2].pName = "indirectMaterialBuffer";
-            compactParams[2].ppBuffers = &pVisibilityBuffer->ppIndirectDataIndexBuffer[0];
-            if (pRenderer->pGpu->mSettings.mIndirectCommandBuffer)
-            {
-                // Required to generate ICB (to bind index buffer)
-                compactParams[3].pName = "filteredIndicesBuffer";
-                compactParams[3].mCount = NUM_CULLING_VIEWPORTS;
-                compactParams[3].ppBuffers = &pVisibilityBuffer->ppFilteredIndexBuffer[0];
-                paramsCount++;
-            }
-
-            updateDescriptorSet(pRenderer, 0, pDescriptorSetBatchCompaction, paramsCount, compactParams);
         }
         // VB Shade
         {
@@ -7997,7 +7972,7 @@ public:
                                              prerenderIndirectionTexMips[1]->pTexture, prerenderIndirectionTexMips[2]->pTexture,
                                              prerenderIndirectionTexMips[3]->pTexture, prerenderIndirectionTexMips[4]->pTexture };
 
-            DescriptorData vbShadeParams[18] = {};
+            DescriptorData vbShadeParams[19] = {};
             vbShadeParams[0].pName = "vbPassTexture";
             vbShadeParams[0].ppTextures = &pRenderTargetVBPass->pTexture;
             vbShadeParams[1].pName = "diffuseMaps";
@@ -8034,10 +8009,8 @@ public:
             vbShadeParams[14].ppTextures = &msmShadowMap;
             vbShadeParams[15].pName = "SDFShadowTexture";
             vbShadeParams[15].ppTextures = &sdfShadowTexture;
-            updateDescriptorSet(pRenderer, 0, pDescriptorSetVBShade[0], 16, vbShadeParams);
             vbShadeParams[16].pName = "SDFShadowTexture";
             vbShadeParams[16].ppTextures = &sdfShadowTexture;
-
             vbShadeParams[17].pName = "ScreenSpaceShadowTexture";
             if (gSupportTextureAtomics)
             {
@@ -8047,42 +8020,36 @@ public:
             {
                 vbShadeParams[17].ppBuffers = &pBufferSSS;
             }
-            updateDescriptorSet(pRenderer, 0, pDescriptorSetVBShade[0], 18, vbShadeParams);
-
-            DescriptorDataRange dataRange = {};
-            dataRange.mOffset = GET_INDIRECT_DRAW_ELEM_INDEX(VIEW_CAMERA, 0, 0) * sizeof(uint32_t);
-            dataRange.mSize = MAX_DRAWS_INDIRECT_ELEMENTS * NUM_GEOMETRY_SETS * sizeof(uint32_t);
-            dataRange.mStructStride = sizeof(uint32_t);
+            vbShadeParams[18].pName = "VBConstantBuffer";
+            vbShadeParams[18].ppBuffers = &pVisibilityBuffer->pVBConstantBuffer;
+            updateDescriptorSet(pRenderer, 0, pDescriptorSetVBShade[0], 19, vbShadeParams);
 
             for (uint32_t i = 0; i < gDataBufferCount; ++i)
             {
-                DescriptorData vbShadeParams[16] = {};
-                vbShadeParams[0].pName = "objectUniformBlock";
-                vbShadeParams[0].ppBuffers = &pBufferMeshTransforms[0][i];
-                vbShadeParams[1].pName = "indirectMaterialBuffer";
-                vbShadeParams[1].ppBuffers = &pVisibilityBuffer->ppIndirectDataIndexBuffer[0];
-                vbShadeParams[2].pName = "filteredIndexBuffer";
-                vbShadeParams[2].ppBuffers = &pVisibilityBuffer->ppFilteredIndexBuffer[VIEW_CAMERA];
-                vbShadeParams[3].pName = "cameraUniformBlock";
-                vbShadeParams[3].ppBuffers = &pBufferCameraUniform[i];
-                vbShadeParams[4].pName = "lightUniformBlock";
-                vbShadeParams[4].ppBuffers = &pBufferLightUniform[i];
-                vbShadeParams[5].pName = "ASMUniformBlock";
-                vbShadeParams[5].ppBuffers = &pBufferASMDataUniform[i];
-                vbShadeParams[6].pName = "renderSettingUniformBlock";
-                vbShadeParams[6].ppBuffers = &pBufferRenderSettings[i];
-                vbShadeParams[7].pName = "ESMInputConstants";
-                vbShadeParams[7].ppBuffers = &pBufferESMUniform[i];
-                vbShadeParams[8].pName = "VSMInputConstants";
-                vbShadeParams[8].ppBuffers = &pBufferVSMUniform[i];
-                vbShadeParams[9].pName = "MSMInputConstants";
-                vbShadeParams[9].ppBuffers = &pBufferMSMUniform[i];
-                vbShadeParams[10].pName = "indirectDrawArgs";
-                vbShadeParams[10].pRanges = &dataRange;
-                vbShadeParams[10].ppBuffers = &pVisibilityBuffer->ppFilteredIndirectDrawArgumentsBuffers[0];
-                vbShadeParams[11].pName = "SSSEnabled";
-                vbShadeParams[11].ppBuffers = &pBufferSSSEnabled[i];
-                updateDescriptorSet(pRenderer, i, pDescriptorSetVBShade[1], 12, vbShadeParams);
+                DescriptorData vbShadeParamsObj[11] = {};
+                vbShadeParamsObj[0].pName = "objectUniformBlock";
+                vbShadeParamsObj[0].ppBuffers = &pBufferMeshTransforms[0][i];
+                vbShadeParamsObj[1].pName = "indirectDataBuffer";
+                vbShadeParamsObj[1].ppBuffers = &pVisibilityBuffer->ppIndirectDataBuffer[i];
+                vbShadeParamsObj[2].pName = "filteredIndexBuffer";
+                vbShadeParamsObj[2].ppBuffers = &pVisibilityBuffer->ppFilteredIndexBuffer[VIEW_CAMERA];
+                vbShadeParamsObj[3].pName = "cameraUniformBlock";
+                vbShadeParamsObj[3].ppBuffers = &pBufferCameraUniform[i];
+                vbShadeParamsObj[4].pName = "lightUniformBlock";
+                vbShadeParamsObj[4].ppBuffers = &pBufferLightUniform[i];
+                vbShadeParamsObj[5].pName = "ASMUniformBlock";
+                vbShadeParamsObj[5].ppBuffers = &pBufferASMDataUniform[i];
+                vbShadeParamsObj[6].pName = "renderSettingUniformBlock";
+                vbShadeParamsObj[6].ppBuffers = &pBufferRenderSettings[i];
+                vbShadeParamsObj[7].pName = "ESMInputConstants";
+                vbShadeParamsObj[7].ppBuffers = &pBufferESMUniform[i];
+                vbShadeParamsObj[8].pName = "VSMInputConstants";
+                vbShadeParamsObj[8].ppBuffers = &pBufferVSMUniform[i];
+                vbShadeParamsObj[9].pName = "MSMInputConstants";
+                vbShadeParamsObj[9].ppBuffers = &pBufferMSMUniform[i];
+                vbShadeParamsObj[10].pName = "SSSEnabled";
+                vbShadeParamsObj[10].ppBuffers = &pBufferSSSEnabled[i];
+                updateDescriptorSet(pRenderer, i, pDescriptorSetVBShade[1], 11, vbShadeParamsObj);
             }
         }
         // Resolve
@@ -8129,16 +8096,20 @@ public:
         }
         // ASM Depth, VB Pass
         {
-            DescriptorData depthPassParams[1] = {};
+            DescriptorData depthPassParams[3] = {};
             depthPassParams[0].pName = "diffuseMaps";
             depthPassParams[0].mCount = gMaterialCount;
             depthPassParams[0].ppTextures = gDiffuseMapsStorage;
-            updateDescriptorSet(pRenderer, 0, pDescriptorSetVBPass[0], 1, depthPassParams);
+            depthPassParams[1].pName = "vertexPositionBuffer";
+            depthPassParams[1].ppBuffers = &pGeom->pVertexBuffers[0];
+            depthPassParams[2].pName = "vertexTexCoordBuffer";
+            depthPassParams[2].ppBuffers = &pGeom->pVertexBuffers[1];
+            updateDescriptorSet(pRenderer, 0, pDescriptorSetVBPass[0], 3, depthPassParams);
             for (uint32_t i = 0; i < gDataBufferCount; ++i)
             {
                 DescriptorData objectParams[1] = {};
-                objectParams[0].pName = "indirectMaterialBuffer";
-                objectParams[0].ppBuffers = &pVisibilityBuffer->ppIndirectDataIndexBuffer[0];
+                objectParams[0].pName = "indirectDataBuffer";
+                objectParams[0].ppBuffers = &pVisibilityBuffer->ppIndirectDataBuffer[i];
                 updateDescriptorSet(pRenderer, i, pDescriptorSetVBPass[1], 1, objectParams);
 
                 objectParams[0].pName = "objectUniformBlock";
@@ -8442,9 +8413,6 @@ public:
         addRootSignature(pRenderer, &BlurRootDesc, &pRootSignatureBlurCompute);
         gBlurConstantsIndex = getDescriptorIndexFromName(pRootSignatureBlurCompute, "BlurRootConstants");
 
-        RootSignatureDesc batchCompactionRootDesc = { &pShaderBatchCompaction, 1 };
-        addRootSignature(pRenderer, &batchCompactionRootDesc, &pRootSignatureBatchCompaction);
-
         RootSignatureDesc updateSDFVolumeTextureAtlasRootDesc = { &pShaderUpdateSDFVolumeTextureAtlas, 1 };
 
         const char*       visualizeSDFMeshSamplerNames[] = { "clampToEdgeTrillinearSampler", "clampToEdgeNearSampler" };
@@ -8496,17 +8464,10 @@ public:
 
         addRootSignature(pRenderer, &SSSRootDesc, &pRootSignatureSSS);
         gSSSRootConstantIndex = getDescriptorIndexFromName(pRootSignatureSSS, "DispatchRootConstants");
-        uint32_t                   indirectArgCount = 0;
-        IndirectArgumentDescriptor indirectArgs[2] = {};
-        if (pRenderer->pGpu->mSettings.mIndirectRootConstant)
-        {
-            indirectArgs[0].mType = INDIRECT_CONSTANT;
-            indirectArgs[0].mIndex = getDescriptorIndexFromName(pRootSignatureVBPass, "indirectRootConstant");
-            indirectArgs[0].mByteSize = sizeof(uint32_t);
-            ++indirectArgCount;
-        }
-        indirectArgs[indirectArgCount++].mType = INDIRECT_DRAW_INDEX;
-        CommandSignatureDesc vbPassDesc = { pRootSignatureVBPass, indirectArgs, indirectArgCount };
+
+        IndirectArgumentDescriptor indirectArg = {};
+        indirectArg.mType = INDIRECT_DRAW_INDEX;
+        CommandSignatureDesc vbPassDesc = { pRootSignatureVBPass, &indirectArg, 1 };
         addIndirectCommandSignature(pRenderer, &vbPassDesc, &pCmdSignatureVBPass);
     }
 
@@ -8528,7 +8489,6 @@ public:
 
         removeRootSignature(pRenderer, pRootSignatureClearBuffers);
         removeRootSignature(pRenderer, pRootSignatureTriangleFiltering);
-        removeRootSignature(pRenderer, pRootSignatureBatchCompaction);
 
         removeRootSignature(pRenderer, pRootSignatureUpdateSDFVolumeTextureAtlas);
         removeRootSignature(pRenderer, pRootSignatureSDFMeshVisualization);
@@ -8626,24 +8586,17 @@ public:
         addShader(pRenderer, &visibilityBufferPassAlphaShaderDesc, &pShaderVBBufferPass[GEOMSET_ALPHA_CUTOUT]);
 
         ShaderLoadDesc clearBuffersShaderDesc = {};
-        clearBuffersShaderDesc.mStages[0].pFileName =
-            pRenderer->pGpu->mSettings.mIndirectCommandBuffer ? "clearVisibilityBuffers_icb.comp" : "clearVisibilityBuffers.comp";
+        clearBuffersShaderDesc.mStages[0].pFileName = "clearVisibilityBuffers.comp";
         addShader(pRenderer, &clearBuffersShaderDesc, &pShaderClearBuffers);
 
         ShaderLoadDesc triangleFilteringShaderDesc = {};
-        triangleFilteringShaderDesc.mStages[0].pFileName =
-            pRenderer->pGpu->mSettings.mIndirectCommandBuffer ? "triangleFiltering_icb.comp" : "triangleFiltering.comp";
+        triangleFilteringShaderDesc.mStages[0].pFileName = "triangleFiltering.comp";
         addShader(pRenderer, &triangleFilteringShaderDesc, &pShaderTriangleFiltering);
 
         ShaderLoadDesc BlurCompShaderDesc = {};
 
         BlurCompShaderDesc.mStages[0].pFileName = "gaussianBlur.comp";
         addShader(pRenderer, &BlurCompShaderDesc, &pShaderBlurComp);
-
-        ShaderLoadDesc batchCompactionShaderDesc = {};
-        batchCompactionShaderDesc.mStages[0].pFileName =
-            pRenderer->pGpu->mSettings.mIndirectCommandBuffer ? "batchCompaction_icb.comp" : "batchCompaction.comp";
-        addShader(pRenderer, &batchCompactionShaderDesc, &pShaderBatchCompaction);
 
         ShaderLoadDesc updateSDFVolumeTextureAtlasShaderDesc = {};
         updateSDFVolumeTextureAtlasShaderDesc.mStages[0].pFileName = "updateRegion3DTexture.comp";
@@ -8780,7 +8733,6 @@ public:
 
         removeShader(pRenderer, pShaderClearBuffers);
         removeShader(pRenderer, pShaderTriangleFiltering);
-        removeShader(pRenderer, pShaderBatchCompaction);
 
         removeShader(pRenderer, pShaderUpdateSDFVolumeTextureAtlas);
         for (uint32_t i = 0; i < MSAA_LEVELS_COUNT; ++i)
@@ -8824,27 +8776,6 @@ public:
         /************************************************************************/
         // Setup vertex layout for all shaders
         /************************************************************************/
-        VertexLayout vertexLayoutPositionOnly = {};
-        vertexLayoutPositionOnly.mBindingCount = 1;
-        vertexLayoutPositionOnly.mAttribCount = 1;
-        vertexLayoutPositionOnly.mAttribs[0].mSemantic = SEMANTIC_POSITION;
-        vertexLayoutPositionOnly.mAttribs[0].mFormat = TinyImageFormat_R32G32B32_SFLOAT;
-        vertexLayoutPositionOnly.mAttribs[0].mBinding = 0;
-        vertexLayoutPositionOnly.mAttribs[0].mLocation = 0;
-        vertexLayoutPositionOnly.mAttribs[0].mOffset = 0;
-
-        VertexLayout vertexLayoutPosAndTex = {};
-        vertexLayoutPosAndTex.mBindingCount = 2;
-        vertexLayoutPosAndTex.mAttribCount = 2;
-        vertexLayoutPosAndTex.mAttribs[0].mSemantic = SEMANTIC_POSITION;
-        vertexLayoutPosAndTex.mAttribs[0].mFormat = TinyImageFormat_R32G32B32_SFLOAT;
-        vertexLayoutPosAndTex.mAttribs[0].mBinding = 0;
-        vertexLayoutPosAndTex.mAttribs[0].mLocation = 0;
-        vertexLayoutPosAndTex.mAttribs[1].mSemantic = SEMANTIC_TEXCOORD0;
-        vertexLayoutPosAndTex.mAttribs[1].mFormat = TinyImageFormat_R32_UINT;
-        vertexLayoutPosAndTex.mAttribs[1].mBinding = 1;
-        vertexLayoutPosAndTex.mAttribs[1].mLocation = 1;
-
         VertexLayout vertexLayoutQuad = {};
         vertexLayoutQuad.mBindingCount = 1;
         vertexLayoutQuad.mAttribCount = 2;
@@ -8869,10 +8800,6 @@ public:
         depthStateLEQUALEnabledDesc.mDepthFunc = CMP_LEQUAL;
         depthStateLEQUALEnabledDesc.mDepthWrite = true;
         depthStateLEQUALEnabledDesc.mDepthTest = true;
-
-        RasterizerStateDesc rasterStateDesc = { CULL_MODE_FRONT, 0, 0.0f };
-        RasterizerStateDesc rasterStateMsDesc = { CULL_MODE_FRONT, 0, 0.0f, FILL_MODE_SOLID };
-        rasterStateMsDesc.mMultiSample = true;
 
         RasterizerStateDesc rasterStateCullNoneDesc = { CULL_MODE_NONE };
         RasterizerStateDesc rasterStateCullNoneMsDesc = { CULL_MODE_NONE, 0, 0, FILL_MODE_SOLID };
@@ -8920,21 +8847,14 @@ public:
         vbPassPipelineSettings.mSampleQuality = pRenderTargetVBPass->mSampleQuality;
         vbPassPipelineSettings.mDepthStencilFormat = pRenderTargetDepth->mFormat;
         vbPassPipelineSettings.pRootSignature = pRootSignatureVBPass;
-        vbPassPipelineSettings.pVertexLayout = &vertexLayoutPosAndTex;
-        vbPassPipelineSettings.mSupportIndirectCommandBuffer = true;
+        vbPassPipelineSettings.pVertexLayout = NULL;
+        vbPassPipelineSettings.pRasterizerState = gAppSettings.mMsaaLevel > 1 ? &rasterStateCullNoneMsDesc : &rasterStateCullNoneDesc;
 
         for (uint32_t i = 0; i < gNumGeomSets; ++i)
         {
-            vbPassPipelineSettings.pVertexLayout = (i == GEOMSET_ALPHA_CUTOUT) ? &vertexLayoutPosAndTex : &vertexLayoutPositionOnly;
-
-            if (gAppSettings.mMsaaLevel > 1)
-                vbPassPipelineSettings.pRasterizerState = i == GEOMSET_ALPHA_CUTOUT ? &rasterStateCullNoneMsDesc : &rasterStateMsDesc;
-            else
-                vbPassPipelineSettings.pRasterizerState = i == GEOMSET_ALPHA_CUTOUT ? &rasterStateCullNoneDesc : &rasterStateDesc;
-
             vbPassPipelineSettings.pShaderProgram = pShaderVBBufferPass[i];
 
-#if defined(XBOX)
+#if defined(GFX_EXTENDED_PSO_OPTIONS)
             ExtendedGraphicsPipelineDesc edescs[2] = {};
             edescs[0].type = EXTENDED_GRAPHICS_PIPELINE_TYPE_SHADER_LIMITS;
             initExtendedGraphicsShaderLimits(&edescs[0].shaderLimitsDesc);
@@ -8972,7 +8892,7 @@ public:
             vbShadePipelineSettings.pColorFormats = &pRenderTargetIntermediate->mFormat;
             vbShadePipelineSettings.mSampleQuality = pSwapChain->ppRenderTargets[0]->mSampleQuality;
         }
-#if defined(XBOX)
+#if defined(GFX_EXTENDED_PSO_OPTIONS)
         ExtendedGraphicsPipelineDesc edescs[2] = {};
         edescs[0].type = EXTENDED_GRAPHICS_PIPELINE_TYPE_SHADER_LIMITS;
         initExtendedGraphicsShaderLimits(&edescs[0].shaderLimitsDesc);
@@ -9002,12 +8922,6 @@ public:
         triangleFilteringPipelineSettings.pShaderProgram = pShaderTriangleFiltering;
         triangleFilteringPipelineSettings.pRootSignature = pRootSignatureTriangleFiltering;
         addPipeline(pRenderer, &desc, &pPipelineTriangleFiltering);
-
-        desc.mComputeDesc = {};
-        ComputePipelineDesc& batchCompactionPipelineSettings = desc.mComputeDesc;
-        batchCompactionPipelineSettings.pShaderProgram = pShaderBatchCompaction;
-        batchCompactionPipelineSettings.pRootSignature = pRootSignatureBatchCompaction;
-        addPipeline(pRenderer, &desc, &pPipelineBatchCompaction);
 
         desc.mComputeDesc = {};
         ComputePipelineDesc& BlurCompPipelineSettings = desc.mComputeDesc;
@@ -9098,15 +9012,11 @@ public:
         ASMIndirectDepthPassPipelineDesc.mSampleQuality = pRenderTargetASMDepthPass->mSampleQuality;
         ASMIndirectDepthPassPipelineDesc.pRootSignature = pRootSignatureVBPass;
         ASMIndirectDepthPassPipelineDesc.pShaderProgram = pShaderIndirectDepthPass;
-        ASMIndirectDepthPassPipelineDesc.pRasterizerState = &rasterStateDesc;
-        ASMIndirectDepthPassPipelineDesc.pVertexLayout = &vertexLayoutPositionOnly;
-        ASMIndirectDepthPassPipelineDesc.mSupportIndirectCommandBuffer = true;
+        ASMIndirectDepthPassPipelineDesc.pRasterizerState = &rasterStateCullNoneDesc;
+        ASMIndirectDepthPassPipelineDesc.pVertexLayout = NULL;
         addPipeline(pRenderer, &desc, &pPipelineIndirectDepthPass);
 
         ASMIndirectDepthPassPipelineDesc.pShaderProgram = pShaderIndirectAlphaDepthPass;
-        ASMIndirectDepthPassPipelineDesc.pVertexLayout = &vertexLayoutPosAndTex;
-        ASMIndirectDepthPassPipelineDesc.pRasterizerState = &rasterStateCullNoneDesc;
-
         addPipeline(pRenderer, &desc, &pPipelineIndirectAlphaDepthPass);
 
         desc.mGraphicsDesc = {};
@@ -9119,14 +9029,11 @@ public:
         indirectESMDepthPassPipelineDesc.mSampleQuality = pRenderTargetShadowMap->mSampleQuality;
         indirectESMDepthPassPipelineDesc.pRootSignature = pRootSignatureVBPass;
         indirectESMDepthPassPipelineDesc.pRasterizerState = &rasterStateCullNoneDesc;
-        indirectESMDepthPassPipelineDesc.pVertexLayout = &vertexLayoutPositionOnly;
+        indirectESMDepthPassPipelineDesc.pVertexLayout = NULL;
         indirectESMDepthPassPipelineDesc.pShaderProgram = pShaderIndirectDepthPass;
-        indirectESMDepthPassPipelineDesc.mSupportIndirectCommandBuffer = true;
         addPipeline(pRenderer, &desc, &pPipelineESMIndirectDepthPass);
 
         indirectESMDepthPassPipelineDesc.pShaderProgram = pShaderIndirectAlphaDepthPass;
-        indirectESMDepthPassPipelineDesc.pVertexLayout = &vertexLayoutPosAndTex;
-
         addPipeline(pRenderer, &desc, &pPipelineESMIndirectAlphaDepthPass);
 
         desc.mGraphicsDesc = {};
@@ -9140,14 +9047,11 @@ public:
         indirectVSMDepthPassPipelineDesc.mSampleQuality = pRenderTargetVSM[0]->mSampleQuality;
         indirectVSMDepthPassPipelineDesc.pRootSignature = pRootSignatureVBPass;
         indirectVSMDepthPassPipelineDesc.pRasterizerState = &rasterStateCullNoneDesc;
-        indirectVSMDepthPassPipelineDesc.pVertexLayout = &vertexLayoutPositionOnly;
+        indirectVSMDepthPassPipelineDesc.pVertexLayout = NULL;
         indirectVSMDepthPassPipelineDesc.pShaderProgram = pShaderIndirectVSMDepthPass;
-        indirectVSMDepthPassPipelineDesc.mSupportIndirectCommandBuffer = true;
         addPipeline(pRenderer, &desc, &pPipelineVSMIndirectDepthPass);
 
         indirectVSMDepthPassPipelineDesc.pShaderProgram = pShaderIndirectVSMAlphaDepthPass;
-        indirectVSMDepthPassPipelineDesc.pVertexLayout = &vertexLayoutPosAndTex;
-
         addPipeline(pRenderer, &desc, &pPipelineVSMIndirectAlphaDepthPass);
 
         desc.mGraphicsDesc = {};
@@ -9161,14 +9065,11 @@ public:
         indirectMSMDepthPassPipelineDesc.mSampleQuality = pRenderTargetMSM[0]->mSampleQuality;
         indirectMSMDepthPassPipelineDesc.pRootSignature = pRootSignatureVBPass;
         indirectMSMDepthPassPipelineDesc.pRasterizerState = &rasterStateCullNoneDesc;
-        indirectMSMDepthPassPipelineDesc.pVertexLayout = &vertexLayoutPositionOnly;
+        indirectMSMDepthPassPipelineDesc.pVertexLayout = NULL;
         indirectMSMDepthPassPipelineDesc.pShaderProgram = pShaderIndirectMSMDepthPass;
-        indirectMSMDepthPassPipelineDesc.mSupportIndirectCommandBuffer = true;
         addPipeline(pRenderer, &desc, &pPipelineMSMIndirectDepthPass);
 
         indirectMSMDepthPassPipelineDesc.pShaderProgram = pShaderIndirectMSMAlphaDepthPass;
-        indirectMSMDepthPassPipelineDesc.pVertexLayout = &vertexLayoutPosAndTex;
-
         addPipeline(pRenderer, &desc, &pPipelineMSMIndirectAlphaDepthPass);
 
         desc.mGraphicsDesc = {};
@@ -9303,7 +9204,6 @@ public:
         }
         removePipeline(pRenderer, pPipelineClearBuffers);
         removePipeline(pRenderer, pPipelineTriangleFiltering);
-        removePipeline(pRenderer, pPipelineBatchCompaction);
 
         removePipeline(pRenderer, pPipelineUpdateSDFVolumeTextureAtlas);
         removePipeline(pRenderer, pPipelineSDFMeshVisualization);
@@ -9316,7 +9216,7 @@ public:
 
 void GuiController::updateDynamicUI()
 {
-    if (gRenderSettings.mShadowType != GuiController::currentlyShadowType)
+    if ((int)gRenderSettings.mShadowType != GuiController::currentlyShadowType)
     {
         if (GuiController::currentlyShadowType == SHADOW_TYPE_ESM)
             uiHideDynamicWidgets(&GuiController::esmDynamicWidgets, pGuiWindow);
@@ -9437,6 +9337,7 @@ void GuiController::addGui()
         uiSetWidgetOnEditedCallback(msaaWidget, nullptr,
                                     [](void* pUserData)
                                     {
+                                        UNREF_PARAM(pUserData);
                                         ReloadDesc reloadDesc;
                                         reloadDesc.mType = RELOAD_TYPE_RENDERTARGET; /*TODO: new type */
                                         requestReload(&reloadDesc);
