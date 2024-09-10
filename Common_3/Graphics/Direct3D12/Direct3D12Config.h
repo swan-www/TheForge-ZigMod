@@ -37,7 +37,10 @@
 #include <dxgidebug.h>
 
 #include "../ThirdParty/OpenSource/Direct3d12Agility/include/d3d12.h"
+#ifdef __cplusplus
 #include "../ThirdParty/OpenSource/DirectXShaderCompiler/inc/dxcapi.h"
+#endif
+
 #endif
 
 //////////////////////////////////////////////

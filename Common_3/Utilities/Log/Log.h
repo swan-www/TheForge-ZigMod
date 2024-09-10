@@ -84,9 +84,11 @@ extern "C"
     FORGE_API void writeLog(uint32_t level, const char* filename, int line_number, const char* message, ...);
     //+V576, function:writeRawLog, format_arg:3, ellipsis_arg:4
     FORGE_API void writeRawLog(uint32_t level, bool error, const char* message, ...);
+	FORGE_API void writeRawLogVaList(uint32_t level, bool error, const char* message, va_list args);
 
     //+V576, function:_FailedAssert, format_arg:4, ellipsis_arg:5
     FORGE_API void _FailedAssert(const char* file, int line, const char* statement, const char* msg, ...);
+	FORGE_API void _FailedAssertVaList(const char* file, int line, const char* statement, const char* msgFmt, va_list args);
 
     // Usage:
     // puts(humanReadableTime(ns).str);

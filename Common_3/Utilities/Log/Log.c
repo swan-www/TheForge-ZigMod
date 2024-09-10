@@ -294,56 +294,66 @@ void writeRawLog(uint32_t level, bool error, const char* message, ...)
 {
     va_list args;
     va_start(args, message);
-    vsnprintf(gLogBuffer, LOG_MAX_BUFFER, message, args);
+    writeRawLogVaList(level, error, message, args);
     va_end(args);
+}
 
-    if (gConsoleLogging)
+void writeRawLogVaList(uint32_t level, bool error, const char* message, va_list args)
+{
+    vsnprintf(gLogBuffer, LOG_MAX_BUFFER, message, args);
+
+    if(gConsoleLogging)
     {
         _PrintUnicode(gLogBuffer, error);
     }
 
     acquireMutex(&gLogger.mLogMutex);
     {
-        for (LogCallback* pCallback = gLogger.pCallbacks; pCallback != gLogger.pCallbacks + gLogger.mCallbacksSize; ++pCallback)
+        for(LogCallback* pCallback = gLogger.pCallbacks; pCallback != gLogger.pCallbacks + gLogger.mCallbacksSize; ++pCallback)
         {
-            if (pCallback->mLevel & level)
+            if(pCallback->mLevel & level)
                 pCallback->mCallback(pCallback->mUserData, gLogBuffer);
         }
     }
     releaseMutex(&gLogger.mLogMutex);
 }
 
-void _FailedAssert(const char* file, int line, const char* statement, const char* msgFmt, ...)
+void _FailedAssertVaList(const char* file, int line, const char* statement, const char* msgFmt, va_list args)
 {
     char usrMsgBuf[LOG_MAX_BUFFER];
-    if (msgFmt && msgFmt[0])
+    if(msgFmt && msgFmt[0])
     {
-        va_list args;
-        va_start(args, msgFmt);
         vsnprintf(usrMsgBuf, sizeof(usrMsgBuf), msgFmt, args);
-        va_end(args);
     }
     else
     {
         usrMsgBuf[0] = '\0';
     }
 
-    if (!gIsLoggerInitialized)
+    if(!gIsLoggerInitialized)
     {
-        if (usrMsgBuf[0])
+        if(usrMsgBuf[0])
             _OutputDebugString("Assert failed: (%s)\n\nFile: %s\nLine: %d\nMessage: %s\n\n", statement, file, line, usrMsgBuf);
         else
             _OutputDebugString("Assert failed: (%s)\n\nFile: %s\nLine: %d\n\n", statement, file, line);
     }
     else
     {
-        if (usrMsgBuf[0])
+        if(usrMsgBuf[0])
             writeLog(eERROR, file, line, "Assert failed: %s\nAssert message: %s", statement, usrMsgBuf);
         else
             writeLog(eERROR, file, line, "Assert failed: %s", statement);
     }
 
     _FailedAssertImpl(file, line, statement, usrMsgBuf[0] ? usrMsgBuf : NULL);
+}
+
+void _FailedAssert(const char* file, int line, const char* statement, const char* msgFmt, ...)
+{
+    va_list args;
+    va_start(args, msgFmt);
+    _FailedAssertVaList(file, line, statement, msgFmt, args);
+    va_end(args);
 }
 
 static void addInitialLogFile(const char* appName)
